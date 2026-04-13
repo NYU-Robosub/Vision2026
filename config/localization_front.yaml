@@ -1,0 +1,35 @@
+front_localization:
+  ros__parameters:
+    input_pose_topic: /front/zed_node/pose
+    input_odom_topic: /front/zed_node/odom
+    output_pose_topic: /localization/front/pose
+    output_odom_topic: /localization/front/odom
+
+    # Choose whether the published pose topic follows the ZED map pose or the
+    # ZED odometry pose. TF still uses both when available.
+    pose_source: pose
+    publish_pose: true
+    publish_odom: true
+    publish_tf: true
+    publish_map_to_odom: true
+    publish_odom_to_base: true
+    publish_camera_mount_tf: true
+    publish_filtered_pose: false
+    filtered_pose_topic: /localization/front/pose_filtered
+
+    # Official robot frame names for the front-only stack.
+    map_frame: map
+    odom_frame: odom
+    base_frame: base_link
+    camera_frame: front_camera_link
+
+    # Physical mount of the front camera on the robot body.
+    base_to_camera_xyz: [0.0, 0.0, 0.0]
+    base_to_camera_rpy: [0.0, 0.0, 0.0]
+
+    # Guardrails for building map -> odom from two incoming sources.
+    max_sync_dt_sec: 0.2
+    publish_identity_map_to_odom_on_startup: true
+
+    # First-order smoothing for the optional filtered pose output.
+    pose_filter_alpha: 0.2

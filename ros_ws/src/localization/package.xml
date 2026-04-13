@@ -1,0 +1,20 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>localization</name>
+  <version>0.0.1</version>
+  <description>Front-camera localization utilities for the RoboSub vision pipeline.</description>
+
+  <maintainer email="todo@example.com">TODO</maintainer>
+  <license>TODO</license>
+
+  <buildtool_depend>ament_python</buildtool_depend>
+
+  <depend>geometry_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>rclpy</depend>
+  <depend>tf2_ros</depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>
