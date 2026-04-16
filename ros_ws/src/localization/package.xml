@@ -4,8 +4,8 @@
   <version>0.0.1</version>
   <description>Front-camera localization utilities for the RoboSub vision pipeline.</description>
 
-  <maintainer email="todo@example.com">TODO</maintainer>
-  <license>TODO</license>
+  <maintainer email="noreply@robosub.local">RoboSub</maintainer>
+  <license>Proprietary</license>
 
   <buildtool_depend>ament_python</buildtool_depend>
 

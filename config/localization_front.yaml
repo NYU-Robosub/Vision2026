@@ -1,4 +1,4 @@
-front_localization:
+front_pose_node:
   ros__parameters:
     input_pose_topic: /front/zed_node/pose
     input_odom_topic: /front/zed_node/odom
