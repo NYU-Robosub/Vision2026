@@ -1,0 +1,36 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="robosub_zed">
+  <xacro:arg name="camera_name" default="zed_front"/>
+  <xacro:arg name="camera_model" default="zed2i"/>
+  <xacro:arg name="camera_to_base_x" default="0.0"/>
+  <xacro:arg name="camera_to_base_y" default="0.0"/>
+  <xacro:arg name="camera_to_base_z" default="0.0"/>
+  <xacro:arg name="camera_to_base_roll" default="0.0"/>
+  <xacro:arg name="camera_to_base_pitch" default="0.0"/>
+  <xacro:arg name="camera_to_base_yaw" default="0.0"/>
+
+  <xacro:include filename="$(find zed_wrapper)/urdf/zed_macro.urdf.xacro"/>
+  <!--
+    The ZED wrapper's macro declares an optional GNSS-origin block.  Supply
+    an empty block because xacro still requires it at macro expansion time
+    even when GNSS is disabled.
+  -->
+  <xacro:zed_camera name="$(arg camera_name)" model="$(arg camera_model)">
+    <gnss_origin/>
+  </xacro:zed_camera>
+
+  <link name="base_link"/>
+
+  <!--
+    ZED owns localization, so camera_link is the moving root published by the
+    wrapper and base_link is its fixed child. Values are camera->base in meters
+    and radians and must be replaced with measured mount extrinsics.
+  -->
+  <joint name="zed_front_to_base_link" type="fixed">
+    <parent link="$(arg camera_name)_camera_link"/>
+    <child link="base_link"/>
+    <origin
+      xyz="$(arg camera_to_base_x) $(arg camera_to_base_y) $(arg camera_to_base_z)"
+      rpy="$(arg camera_to_base_roll) $(arg camera_to_base_pitch) $(arg camera_to_base_yaw)"/>
+  </joint>
+</robot>

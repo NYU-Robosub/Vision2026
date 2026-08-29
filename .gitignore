@@ -1,0 +1,20 @@
+# ROS 2 / colcon generated workspace artifacts
+/ros_ws/build/
+/ros_ws/install/
+/ros_ws/log/
+
+# Local ROS data captures and generated model artifacts
+/data/rosbags/*
+/data/svo/bottom/*
+/data/svo/front/*
+/models/onnx/*
+/models/tensorrt/*
+/models/weights/*
+
+# Preserve empty directory placeholders
+!/data/rosbags/.gitkeep
+!/data/svo/bottom/.gitkeep
+!/data/svo/front/.gitkeep
+!/models/onnx/.gitkeep
+!/models/tensorrt/.gitkeep
+!/models/weights/.gitkeep
