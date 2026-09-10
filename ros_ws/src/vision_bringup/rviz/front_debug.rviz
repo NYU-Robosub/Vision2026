@@ -57,6 +57,22 @@ Visualization Manager:
       Size (m): 0.01
       Style: Points
       Value: true
+    - Class: rviz_default_plugins/PointCloud2
+      Enabled: false
+      Name: Fused Room Point Cloud
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+        Value: /zed_front/zed_node/mapping/fused_cloud
+      Decay Time: 0
+      Queue Size: 5
+      Selectable: true
+      Size (Pixels): 2
+      Size (m): 0.02
+      Style: Points
+      Value: true
     - Class: rviz_default_plugins/Path
       Enabled: true
       Name: ZED Map Path

@@ -1,0 +1,41 @@
+/rtabmap/rtabmap:
+  ros__parameters:
+    frame_id: zed_front_camera_link
+    map_frame_id: map
+    odom_frame_id: ''  # Consume nav_msgs/Odometry, including covariance.
+    publish_tf: true
+    subscribe_depth: true
+    subscribe_rgb: true
+    subscribe_rgbd: false
+    subscribe_stereo: false
+    subscribe_odom_info: false
+    wait_for_transform: 0.2
+
+    # ZED images, calibration and odometry share the acquisition timestamp.
+    # Verify this on the real stream; 0.23.7's core node has no max-interval option.
+    approx_sync: false
+    topic_queue_size: 10
+    sync_queue_size: 10
+    qos_image: 2  # Best effort subscribers also accept reliable publishers.
+    qos_camera_info: 2
+    qos_odom: 2
+
+    latch: true
+    cloud_output_voxelized: true
+    map_filter_radius: 0.0
+    map_always_update: false
+
+    # Core RTAB-Map parameters MUST be strings. Start conservatively for the VM.
+    Rtabmap/DetectionRate: '2.0'
+    Rtabmap/ImagesAlreadyRectified: 'true'
+    Mem/BinDataKept: 'true'
+    RGBD/LinearUpdate: '0.1'
+    RGBD/AngularUpdate: '0.1'
+    RGBD/OptimizeFromGraphEnd: 'false'
+    Reg/Force3DoF: 'false'
+    Grid/3D: 'true'
+    Grid/Sensor: '1'
+    Grid/RangeMax: '5.0'
+    Grid/DepthDecimation: '2'
+    Grid/CellSize: '0.05'
+    GridGlobal/MaxNodes: '0'  # Do not restrict the assembled cloud to nearby nodes.

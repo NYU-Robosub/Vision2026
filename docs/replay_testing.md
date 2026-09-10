@@ -1,117 +1,157 @@
-# ZED SLAM Validation
+# Bedroom SLAM validation
 
-The best initial test uses the real ZED 2i in a real room, visualizes the run in RViz, and records an SVO so the exact sensor sequence can be replayed. Gazebo does not reproduce ZED optics, stereo matching, IMU fusion, housing refraction, or Area Memory and is not the acceptance environment for Phase 1.
+These are acceptance procedures, not completed results. Keep each outcome and
+its evidence in `docs/test_results/`. The current platform is the laptop Linux VM;
+repeat on Orin later. Use the build and launch instructions in the root README.
 
-## 1. Build
+## 1. Record the environment and inputs
 
-On the Ubuntu 22.04 ROS 2 Humble machine with the pinned ZED SDK and wrapper installed:
+Record the commit and uncommitted changes, VM platform, guest Linux version, ROS,
+ZED SDK, wrapper version/commit, RTAB-Map version, GPU driver, camera serial,
+configuration files, and database/recording filenames. Check `nvidia-smi` and
+camera access inside the VM. A missing camera or inaccessible GPU is an
+environment problem before it is a mapping problem.
 
-```bash
-cd ros_ws
-source /opt/ros/humble/setup.bash
-rosdep install --from-paths src --ignore-src -r -y
-colcon build --symlink-install --cmake-args=-DCMAKE_BUILD_TYPE=Release
-source install/setup.bash
-```
-
-Run launch commands from the repository root so `maps/area_memory/front.area` resolves correctly.
-
-## 2. Smoke test
+Start the ZED-only diagnostic launch and inspect RGB, depth and current cloud.
+From a second sourced terminal:
 
 ```bash
-ros2 launch vision_bringup slam_live.launch.py
-```
-
-Confirm in RViz:
-
-- RGB and registered depth update;
-- TF contains `map`, `odom`, `zed_front_camera_link`, and `base_link`;
-- map and odometry paths update while the camera moves;
-- no duplicate-parent or repeated-transform warnings appear.
-
-Confirm from another terminal:
-
-```bash
+ros2 topic list -t
+ros2 topic info -v /zed_front/zed_node/rgb/color/rect/image
+ros2 topic info -v /zed_front/zed_node/depth/depth_registered
+ros2 topic echo /zed_front/zed_node/rgb/color/rect/camera_info --once
+ros2 topic echo /zed_front/zed_node/odom --once
 ros2 topic hz /zed_front/zed_node/odom
-ros2 topic echo /zed_front/zed_node/pose_with_covariance --once
-ros2 run tf2_ros tf2_echo map zed_front_camera_link
-ros2 run tf2_tools view_frames
+ros2 run tf2_ros tf2_echo odom zed_front_camera_link
 ```
 
-## 3. Dense room-mapping test
+Confirm the actual calibration/image dimensions, optical frames, depth units and
+encoding, timestamp alignment, QoS, finite odometry and covariance. The expected
+topic table is in `architecture.md`; override launch topic arguments if the
+installed wrapper differs. Record actual values rather than assuming the source
+checkout matches the installed binary.
 
-Use the heavier test configuration only while evaluating geometry:
+## 2. Start a separate mapping trial
+
+Stop diagnostics first. Choose a new absolute database filename for the trial:
 
 ```bash
-ros2 launch vision_bringup slam_live.launch.py \
-  zed_config:=$(pwd)/config/zed_front_mapping_test.yaml
+ros2 launch vision_bringup zed_rtabmap.launch.py \
+  database_path:="$HOME/.ros/robosub/maps/bedroom_trial_01.db"
 ```
 
-This enables a reduced registered point cloud and ZED spatial mapping. It is deliberately disabled in the normal runtime configuration to save GPU and memory.
+Keep **Accumulated Room Map** enabled and the current ZED cloud disabled in RViz.
+Fixed Frame is `map` and Decay Time is `0`.
 
-Walk the camera slowly through a textured room. Avoid rapid rotation and featureless walls. In RViz, inspect the registered cloud, trajectory, TF, and whether revisited geometry aligns with earlier observations.
-
-## 4. Repeatable trajectory
-
-Use tape marks or surveyed points:
-
-1. Hold the camera stationary for 60 seconds.
-2. Move in a rectangle of known dimensions.
-3. Return to the starting pose and wait 10 seconds.
-4. Cover the lenses briefly to force tracking degradation.
-5. Uncover the camera and revisit a previously seen area.
-6. Shut down cleanly so Area Memory is saved.
-7. Restart at a known mapped location and measure relocalization time.
-
-Record:
-
-- stationary translation and rotation drift;
-- final closed-loop position error;
-- size and timing of loop-closure corrections;
-- odometry frequency;
-- number and duration of tracking losses;
-- relocalization success and time;
-- CPU, GPU, and GPU-memory usage;
-- visible point-cloud artifacts or duplicated surfaces.
-
-Initial engineering targets for a small indoor room:
-
-- odometry near the configured 30 Hz;
-- no NaN or infinite values;
-- no duplicate TF publishers;
-- stationary translation drift below 5 cm over 60 seconds;
-- closed-loop final position error below 20 cm;
-- recovery after a short occlusion;
-- successful relocalization using saved Area Memory.
-
-These are project targets, not ZED guarantees. Underwater acceptance thresholds must be set after collecting pool data.
-
-## 5. SVO recording and replay
-
-Record synchronized stereo video and IMU using ZED Explorer or the wrapper's SVO recording service. Store recordings under `data/svo/front/` and do not commit large recordings to Git.
-
-Replay:
+Confirm the active ZED settings and inputs:
 
 ```bash
-ros2 launch vision_bringup slam_replay.launch.py \
-  svo_path:=/absolute/path/to/recording.svo2
+ros2 param get /zed_front/zed_node pos_tracking.publish_map_tf
+ros2 param get /zed_front/zed_node pos_tracking.reset_odom_with_loop_closure
+ros2 param get /zed_front/zed_node mapping.mapping_enabled
+ros2 node info /rtabmap/rtabmap
+ros2 topic echo /rtabmap/info --once
+ros2 topic hz /rtabmap/cloud_map
+ros2 run tf2_ros tf2_echo map odom
 ```
 
-For dense mapping during replay:
+All three queried ZED parameters should be false. RTAB-Map alone owns global TF.
+The `/rtabmap/rtabmap` node should subscribe to the documented RGB, depth,
+calibration and odometry topics. No `rgbd_odometry`, `stereo_odometry`, or exporter
+should run in this profile. Record graph node count from `/rtabmap/mapGraph`.
+Cloud rate is measured under an active subscriber and need not match camera rate.
+
+## 3. Perform the room route
+
+| Test | Action | Evidence to record |
+| --- | --- | --- |
+| Stationary | Hold camera still for 60 seconds | Translation/rotation drift, tracking status, no spurious room expansion |
+| Translation | Move 2-3 m along a measured route | Odometry displacement and newly accumulated geometry |
+| Retained geometry | Scan a distinctive wall or desk, then turn away and translate | That region remains in the assembled cloud with current-cloud display disabled |
+| Loop closure | Walk a loop and return to the starting pose/view | RTAB-Map loop-closure event/constraint, map correction, endpoint error and alignment |
+| Tracking recovery | Briefly obscure the lenses, then revisit the mapped area | Loss duration and recovery behavior; do not treat invalid odometry as valid motion |
+
+Initial indoor targets inherited from the project are less than 5 cm translation
+drift over the stationary minute and less than 20 cm closed-loop endpoint error.
+Record orientation errors too. These are provisional engineering targets, not
+manufacturer guarantees. Do not require node count to grow while stationary or
+point count to increase monotonically: filtering and graph correction change it.
+
+For every test record CPU/GPU/RAM usage, RTAB-Map processing rate/latency, odometry
+rate, cloud rate, node count, tracking losses, loop events, and database growth.
+Use `top`/`htop` and `nvidia-smi` on the laptop; label those results as VM results.
+If claiming drift reduction, compare measured alignment/error before and after
+the correction, rather than only reporting a loop event.
+
+## 4. Reopen and relocalize
+
+Stop with Ctrl+C and wait for RTAB-Map to close. Preserve the database and logs.
+Restart with the same filename in localization mode:
 
 ```bash
-ros2 launch vision_bringup slam_replay.launch.py \
-  svo_path:=/absolute/path/to/recording.svo2 \
-  zed_config:=$(pwd)/config/zed_front_mapping_test.yaml
+ros2 launch vision_bringup zed_rtabmap.launch.py mode:=localization \
+  database_path:="$HOME/.ros/robosub/maps/bedroom_trial_01.db"
 ```
 
-Replay the same SVO after every parameter change. Compare trajectory, drift, tracking-loss events, and resource usage rather than judging only by how the RViz picture looks.
+Look at a distinctive previously mapped view. Check that the saved graph and room
+geometry return and that an observation matches the map. Record the time to
+successful localization and the resulting camera pose at a known location.
+Simply seeing an old cloud or a TF is not proof of relocalization.
 
-## 6. Simulation decision
+With RViz subscribed, explicitly request the saved global map if it has not yet
+been displayed:
 
-- RViz: required for inspecting real or replayed ROS data.
-- SVO replay: required for repeatable ZED regression testing.
-- Gazebo: deferred; useful later for generic AUV dynamics and interface tests, but not for validating the real ZED SDK pipeline.
-- Isaac Sim: optional future work if full simulated ZED integration becomes worth its installation and GPU cost.
+```bash
+ros2 service call /rtabmap/publish_map rtabmap_msgs/srv/PublishMap \
+  "{global_map: true, optimized: true, graph_only: false}"
+```
 
-After room testing passes, repeat depth, drift, loop closure, and relocalization tests underwater through the actual camera housing. That is the decisive validation environment for RoboSub.
+Confirm the service name/type with `ros2 service list -t` for the installed
+release. This requests publication; it does not establish camera localization.
+Reopening in `mode:=mapping` permits extending the same graph. Use a different
+database filename for an independent map; do not delete the previous trial.
+
+## 5. SVO regression
+
+Record the same stationary/translation/loop route with ZED Explorer or the
+wrapper's SVO recording service. Keep stereo and IMU data, a recording identifier,
+and a checksum. Large files belong under `data/svo/front/` outside Git.
+
+```bash
+ros2 launch vision_bringup zed_rtabmap.launch.py \
+  svo_path:=/absolute/path/to/bedroom.svo2 \
+  database_path:="$HOME/.ros/robosub/maps/replay_trial_01.db"
+```
+
+Use the same recording, route segments and startup conditions for parameter
+comparisons, with a fresh database filename each time. Verify `/clock` advances,
+and that RTAB-Map, RViz and robot_state_publisher use simulated time. ZED itself
+must not wait for its own published clock. SVO playback is not looped.
+
+Compare retained geometry, endpoint error, graph size, loop events, tracking-loss
+duration, processing latency and resources. Replay requires the ZED SDK/GPU even
+without a physically attached camera. If no recording is available, mark this
+test **not run**.
+
+## Troubleshooting by symptom
+
+| Symptom | First checks |
+| --- | --- |
+| Current cloud only; old geometry disappears | Enable `/rtabmap/cloud_map`, disable current-cloud display, check graph node creation and valid depth |
+| RTAB-Map receives no usable data | Actual topic names, camera info, encodings, timestamps, QoS, sync warnings and TF availability |
+| Map jumps or doubles unexpectedly | Duplicate TF publishers, ZED odometry reset setting, tracking quality, loop constraints |
+| Map absent after restart | Correct database path, clean previous shutdown, graph contents, map subscriber/publication; then check localization separately |
+| Sparse or empty depth | Inspect ZED confidence/texture settings and real scene; do not assume a database fault |
+| Delayed map or rising memory | Record processing latency, lower workload based on measurements; retain complete-map acceptance while tuning |
+
+## Automated checks and result record
+
+Run the package's tests using the README commands. The launch tests evaluate ROS
+substitutions and effective settings. The runtime smoke test starts the actual
+RTAB-Map executable on a separate ROS domain with a disposable database; it tests
+parameter acceptance and clean startup/shutdown, not room reconstruction.
+
+For each physical/replay run, copy `docs/test_results/template.md` to a new result
+file. Fill measurements and link logs, recordings and databases. Update the
+acceptance register in `scope.md` only with supporting evidence. Unavailable
+hardware and recordings are **not run**, not passing tests.

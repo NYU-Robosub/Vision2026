@@ -2,7 +2,7 @@
 <package format="3">
   <name>vision_bringup</name>
   <version>0.0.1</version>
-  <description>Launch files for the RoboSub ZED vision pipeline.</description>
+  <description>ZED sensor bringup and RTAB-Map room SLAM for RoboSub.</description>
 
   <maintainer email="noreply@robosub.local">RoboSub</maintainer>
   <license>Proprietary</license>
@@ -11,10 +11,21 @@
 
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
+  <depend>rclcpp</depend>
   <exec_depend>robot_state_publisher</exec_depend>
   <exec_depend>rviz2</exec_depend>
+  <depend>sensor_msgs</depend>
+  <depend>std_srvs</depend>
+  <exec_depend>ament_index_python</exec_depend>
+  <exec_depend>rtabmap_slam</exec_depend>
   <exec_depend>zed_wrapper</exec_depend>
   <exec_depend>xacro</exec_depend>
+
+  <test_depend>ament_cmake_pytest</test_depend>
+  <test_depend>python3-pytest</test_depend>
+  <test_depend>python3-yaml</test_depend>
+  <test_depend>rclpy</test_depend>
+  <test_depend>rcl_interfaces</test_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

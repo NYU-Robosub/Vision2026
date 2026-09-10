@@ -1,18 +1,14 @@
 /**:
   ros__parameters:
-    use_sim_time: false
+    debug:
+      use_pub_timestamps: false  # Preserve shared acquisition stamps for exact sync.
 
     svo:
       use_svo_timestamps: true
-      publish_svo_clock: false
       svo_loop: false
       svo_realtime: true
 
     general:
-      # This camera name becomes the front camera namespace in the wrapper.
-      camera_name: zed_front
-      camera_model: zed2i
-      serial_number: 36534008
       grab_resolution: HD720
       grab_frame_rate: 30
       pub_resolution: CUSTOM
@@ -29,43 +25,37 @@
       depth_mode: NEURAL_LIGHT
       depth_stabilization: -1
       depth_confidence: 95
+      depth_texture_conf: 100
       publish_depth_map: true
-      publish_depth_info: false
-      publish_point_cloud: true
+      publish_depth_info: false  # RGB camera_info accompanies rectified RGB.
+      publish_point_cloud: true  # Optional RViz comparison; not RTAB-Map's input.
       point_cloud_freq: 5.0
       point_cloud_res: REDUCED
 
     pos_tracking:
       pos_tracking_enabled: true
-      # GEN_1 is the stable default in the pinned v5.2.2 wrapper. Benchmark
-      # GEN_3 underwater before changing this setting.
       pos_tracking_mode: GEN_1
       imu_fusion: true
       publish_tf: true
-      publish_map_tf: true
+      publish_map_tf: false
       map_frame: map
       odometry_frame: odom
-      area_memory: true
-      # Relative paths are resolved from the directory where ros2 launch runs.
-      # Launch from the repository root, or replace this with an absolute path.
-      area_file_path: maps/area_memory/front.area
+      area_memory: false
+      area_file_path: ''
+      save_area_memory_on_closing: false
       enable_localization_only: false
-      save_area_memory_on_closing: true
-      reset_odom_with_loop_closure: true
+      reset_odom_with_loop_closure: false
       set_gravity_as_origin: true
       publish_odom_pose: true
-      publish_pose_cov: true
+      publish_pose_cov: false
       publish_cam_path: true
       path_pub_rate: 2.0
       path_max_count: 10000
 
-    # Dense spatial mapping is intentionally disabled. The current deliverable
-    # needs localization and semantic targets, not a fused mesh/point cloud.
     mapping:
       mapping_enabled: false
 
     sensors:
-      # No in-repo node subscribes to the dedicated IMU topics right now.
       publish_imu_tf: false
       publish_imu: false
       publish_imu_raw: false

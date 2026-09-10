@@ -2,6 +2,8 @@
 /ros_ws/build/
 /ros_ws/install/
 /ros_ws/log/
+__pycache__/
+.pytest_cache/
 
 # Local ROS data captures and generated model artifacts
 /data/rosbags/*
@@ -10,6 +12,7 @@
 /models/onnx/*
 /models/tensorrt/*
 /models/weights/*
+/maps/spatial_mapping/*.ply
 
 # Preserve empty directory placeholders
 !/data/rosbags/.gitkeep
@@ -18,3 +21,4 @@
 !/models/onnx/.gitkeep
 !/models/tensorrt/.gitkeep
 !/models/weights/.gitkeep
+!/maps/spatial_mapping/.gitignore

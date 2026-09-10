@@ -1,0 +1,102 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+Visualization Manager:
+  Class: ''
+  Displays:
+    - Class: rviz_default_plugins/Grid
+      Name: Grid
+      Enabled: true
+      Cell Size: 1
+      Plane Cell Count: 20
+      Reference Frame: <Fixed Frame>
+    - Class: rviz_default_plugins/PointCloud2
+      Name: Accumulated Room Map
+      Enabled: true
+      Topic:
+        Value: /rtabmap/cloud_map
+        Depth: 1
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Durability Policy: Transient Local
+      Decay Time: 0
+      Color Transformer: RGB8
+      Position Transformer: XYZ
+      Style: Points
+      Size (Pixels): 3
+      Size (m): 0.03
+      Queue Size: 2
+    - Class: rviz_default_plugins/PointCloud2
+      Name: Current ZED Observation (toggle to compare)
+      Enabled: false
+      Topic:
+        Value: /zed_front/zed_node/point_cloud/cloud_registered
+        Depth: 1
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+        Durability Policy: Volatile
+      Decay Time: 0
+      Color Transformer: FlatColor
+      Color: 0; 255; 255
+      Position Transformer: XYZ
+      Style: Points
+      Size (Pixels): 2
+      Size (m): 0.01
+      Queue Size: 2
+    - Class: rviz_default_plugins/TF
+      Name: Camera and Robot Frames
+      Enabled: true
+      Frames:
+        All Enabled: true
+      Marker Scale: 0.2
+      Show Arrows: true
+      Show Axes: true
+      Show Names: true
+    - Class: rviz_default_plugins/Axes
+      Name: Current Camera Pose
+      Enabled: true
+      Reference Frame: zed_front_camera_link
+      Length: 0.3
+      Radius: 0.02
+    - Class: rviz_default_plugins/Path
+      Name: Optimized Map Trajectory
+      Enabled: true
+      Color: 0; 255; 0
+      Topic:
+        Value: /rtabmap/mapPath
+        Depth: 1
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Durability Policy: Volatile
+    - Class: rviz_default_plugins/Path
+      Name: Local ZED Odometry Trajectory
+      Enabled: true
+      Color: 255; 180; 0
+      Topic:
+        Value: /zed_front/zed_node/path_odom
+        Depth: 1
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+        Durability Policy: Volatile
+    - Class: rviz_default_plugins/Image
+      Name: Front RGB
+      Enabled: false
+      Topic:
+        Value: /zed_front/zed_node/rgb/color/rect/image
+        Depth: 1
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+        Durability Policy: Volatile
+  Enabled: true
+  Global Options:
+    Background Color: 35; 35; 35
+    Fixed Frame: map
+    Frame Rate: 20
+  Tools:
+    - Class: rviz_default_plugins/Interact
+    - Class: rviz_default_plugins/MoveCamera
+    - Class: rviz_default_plugins/Select
+  Value: true
+Window Geometry:
+  Height: 900
+  Width: 1400

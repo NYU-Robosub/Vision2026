@@ -1,198 +1,143 @@
-# RoboSub ZED Vision Pipeline
+# RoboSub ZED + RTAB-Map
 
-A focused ROS 2 project for evaluating a front-mounted ZED 2i as the visual-inertial SLAM foundation of a RoboSub AUV perception system.
+Bedroom-scale, above-water SLAM using a ZED 2i and ROS 2. ZED supplies RGB,
+registered depth, calibration, and visual-inertial odometry. RTAB-Map builds the
+accumulated room map, corrects its graph, and stores a reusable database.
 
-## Current Goal
+The current test environment is a laptop Linux VM. Jetson Orin deployment comes
+later. There is no detector, custom SLAM algorithm, external IMU fusion, or motion
+control in this update. Requirements and implementation status are in [scope.md](scope.md).
 
-Phase 1 answers one question:
+## Build in Linux
 
-> Can the real ZED 2i localize reliably, close loops, relocalize, and produce useful room geometry before it is trusted underwater or used by motion and semantic perception?
+Repository baseline: Ubuntu 22.04, ROS 2 Humble, ZED SDK 5.2 and the checked-in
+ZED wrapper. Verify camera USB and NVIDIA GPU/CUDA access inside the VM before
+testing the camera. Source/configuration checks cannot establish live SLAM quality.
 
-The active repository performs only ZED SLAM bringup and validation. Object detection, semantic world modeling, motion interfaces, bottom-camera perception, and deployment optimization are future phases and are not represented by placeholder nodes.
-
-## Active System
-
-```text
-ZED 2i
-  |
-  v
-ZED SDK + ZED ROS 2 wrapper
-  |-- RGB and registered depth
-  |-- registered point cloud
-  |-- IMU-fused visual odometry
-  |-- loop-closure-corrected map pose
-  |-- Area Memory and relocalization
-  `-- map and odom TF
-  |
-  +--> robot_state_publisher --> fixed AUV/camera frames
-  `--> RViz2                --> images, point cloud, paths, and TF
-```
-
-There are currently no custom runtime nodes. The canonical launch starts:
-
-1. the Stereolabs ZED wrapper;
-2. `robot_state_publisher`;
-3. RViz2 by default.
-
-This is the smallest useful system for evaluating ZED SLAM without adding unrelated failure modes.
-
-## Technology Baseline
-
-- Ubuntu 22.04 LTS
-- ROS 2 Humble Hawksbill
-- Stereolabs ZED SDK 5.2
-- Stereolabs `zed-ros2-wrapper` tag `v5.2.2`
-- CUDA 12.8 on the Ubuntu development computer
-- ZED 2i stereo camera
-- RViz2 for ROS data and TF inspection
-- ZED SVO for repeatable sensor-data replay
-- JetPack 6.2.2 only when future Jetson Orin deployment begins
-
-Change the SDK, wrapper, and CUDA baseline together and retest it rather than following the wrapper's `master` branch.
-
-## Build
-
-On the Ubuntu 22.04 ROS 2 computer:
+From the repository root, with ROS and the compatible ZED SDK installed:
 
 ```bash
-cd ros_ws
 source /opt/ros/humble/setup.bash
+sudo apt install ros-humble-rtabmap-slam
+cd ros_ws
 rosdep install --from-paths src --ignore-src -r -y
 colcon build --symlink-install --cmake-args=-DCMAKE_BUILD_TYPE=Release
 source install/setup.bash
 ```
 
-Run launches from the repository root so `maps/area_memory/front.area` resolves correctly.
+The RTAB-Map configuration was checked against Humble packages version 0.23.7.
+See [validation results](docs/test_results/implementation_checks.md) for what was
+actually tested. The full ZED/camera demonstration is still pending.
 
-## Run the SLAM Test
+## Map the bedroom
 
-Normal lightweight positional-tracking test:
-
-```bash
-ros2 launch vision_bringup slam_live.launch.py
-```
-
-Dense room-mapping test:
+After sourcing the workspace in each terminal:
 
 ```bash
-ros2 launch vision_bringup slam_live.launch.py \
-  zed_config:=$(pwd)/config/zed_front_mapping_test.yaml
+ros2 launch vision_bringup zed_rtabmap.launch.py
 ```
 
-The dense test enables the registered point cloud and ZED spatial mapping. These are disabled in the normal configuration because they consume additional GPU and memory.
+This starts the ZED wrapper, `robot_state_publisher`, **one RTAB-Map node**, and
+RViz. No second odometry algorithm, custom accumulator, or PLY saver runs in this
+profile. `bash scripts/run_front.sh` is a convenience entry point from the repository.
 
-Replay a recorded SVO:
+In RViz, **Accumulated Room Map** displays `/rtabmap/cloud_map` in `map`.
+The current ZED observation is a separate, initially disabled cyan display.
+Slowly scan a textured wall, turn away, and confirm that the wall remains visible.
+RViz Decay Time is zero: accumulation must come from RTAB-Map.
+
+The initial map resolution is 5 cm with a 5 m depth range and a 2 Hz SLAM
+processing target. These are starting settings for the room trial, not measured
+performance guarantees. Return to the starting view to test loop closure.
+
+## Save, reopen, and relocalize
+
+The default database is `~/.ros/robosub/maps/bedroom.db`, independent of the shell's
+working directory. Normal startup preserves it. Stop with **Ctrl+C and allow clean
+shutdown to finish** so RTAB-Map can finish writing its database.
+
+Restart in localization mode to recognize the saved room without adding new map nodes:
 
 ```bash
-ros2 launch vision_bringup slam_replay.launch.py \
-  svo_path:=/absolute/path/to/recording.svo2
+ros2 launch vision_bringup zed_rtabmap.launch.py mode:=localization
 ```
 
-Replay with dense mapping:
+Localization requires an existing nonempty file. RTAB-Map validates the database
+contents when opening it. A visible saved cloud does not by itself prove that the
+current camera pose has relocalized.
+
+The default `mode:=mapping` reopens the database and permits extending it. For a
+fresh experiment, choose a **different** absolute filename; no launch deletes maps:
 
 ```bash
-ros2 launch vision_bringup slam_replay.launch.py \
-  svo_path:=/absolute/path/to/recording.svo2 \
-  zed_config:=$(pwd)/config/zed_front_mapping_test.yaml
+ros2 launch vision_bringup zed_rtabmap.launch.py \
+  database_path:="$HOME/.ros/robosub/maps/bedroom_trial_02.db"
 ```
 
-RViz starts by default. Disable it for unattended or performance testing with `start_rviz:=false`.
+Use `database_path` in both mapping and localization when choosing a custom file.
+An absolute path beneath `maps/rtabmap/` is also supported and ignored by Git.
+The database stores SLAM observations and graph data; a PLY is only a geometry export.
 
-## What to Validate
+## Repeat from an SVO
 
-The Phase 1 test covers:
-
-- RGB and registered depth quality;
-- registered point-cloud geometry;
-- pose and odometry publication rate;
-- a connected, conflict-free TF tree;
-- stationary drift;
-- closed-loop drift;
-- loop-closure correction;
-- tracking loss and recovery;
-- Area Memory saving;
-- relocalization after restart;
-- CPU, GPU, and memory use;
-- repeatability using the same SVO recording.
-
-The detailed route, commands, measurements, and initial pass criteria are in [`docs/replay_testing.md`](docs/replay_testing.md).
-
-## RViz, SVO, Gazebo, and Isaac Sim
-
-- **RViz is required** to inspect the real or replayed images, depth, point cloud, paths, and TF.
-- **SVO replay is required** for repeatable regression tests against identical ZED stereo and IMU data.
-- **Gazebo is deferred.** It is useful for future AUV physics, controllers, and generic sensor interfaces, but it does not validate real ZED stereo matching, Area Memory, camera-housing refraction, or underwater optics.
-- **Isaac Sim is optional future work.** Stereolabs provides a supported simulated-ZED integration for it, but it is not needed to answer the Phase 1 hardware question.
-
-The strongest validation order is:
-
-1. real ZED in a room;
-2. RViz inspection and quantitative measurements;
-3. SVO replay for repeatability;
-4. real ZED underwater through the final housing;
-5. simulation later, only for a clearly defined purpose.
-
-## TF Ownership
-
-While ZED owns localization, the official camera-root layout is:
-
-```text
-map
-└── odom
-    └── zed_front_camera_link
-        ├── base_link
-        └── ZED optical frames
+```bash
+ros2 launch vision_bringup zed_rtabmap.launch.py \
+  svo_path:=/absolute/path/to/bedroom.svo2 \
+  database_path:="$HOME/.ros/robosub/maps/replay_trial_01.db" \
+  start_rviz:=false
 ```
 
-- ZED publishes dynamic `map -> odom` and `odom -> zed_front_camera_link`.
-- `robot_state_publisher` publishes fixed camera/AUV joints from xacro.
-- No custom node publishes TF.
+Omit `start_rviz:=false` to inspect replay visually. Use a fresh database filename
+for each comparison. ZED publishes recorded `/clock`; RTAB-Map, RViz and the robot
+description publisher use simulated time. The ZED clock producer uses its own
+clock to avoid waiting on itself. Recordings stay under `data/svo/front/`, outside Git.
 
-The camera-to-`base_link` transform currently defaults to zero. Replace it with measured mount translation and rotation before vehicle or underwater validation.
+## ZED-only diagnostics
 
-## Repository Layout
-
-```text
-config/
-  zed_front.yaml                 Lightweight positional tracking
-  zed_front_mapping_test.yaml    Point-cloud and spatial-mapping validation
-data/svo/front/                  Local SVO recordings; large files stay out of Git
-docs/
-  architecture.md                Active and future system architecture
-  replay_testing.md              Room, replay, and underwater test procedure
-maps/area_memory/                Saved ZED Area Memory
-ros_ws/src/vision_bringup/
-  launch/                        Live and SVO replay launches
-  rviz/                          Phase 1 visualization
-  urdf/                          ZED 2i and AUV mounting model
-scripts/run_front.sh             Convenience live-launch script
+```bash
+ros2 launch vision_bringup zed_front.launch.py
 ```
 
-## Phase 1 Definition of Done
+This mode runs ZED's original localization profile and displays the current cloud.
+The compatibility names `slam_live.launch.py` and `slam_replay.launch.py` still
+work for ZED-only diagnostics; the latter requires `svo_path`.
 
-Phase 1 is complete when:
+For the previous ZED fused-mapping/PLY comparison, run from the repository root:
 
-1. one documented command starts the ZED, robot description, and RViz;
-2. images, depth, point cloud, pose, odometry, paths, and TF are inspectable;
-3. no TF edge has competing publishers;
-4. stationary and closed-loop drift are measured rather than judged visually;
-5. tracking-loss recovery and Area Memory relocalization are demonstrated;
-6. the same run can be replayed from SVO;
-7. results and hardware utilization are recorded;
-8. the critical tests are repeated underwater through the real housing.
+```bash
+ros2 launch vision_bringup zed_front.launch.py \
+  zed_config:="$(pwd)/config/zed_front_mapping_test.yaml" export_fused_map:=true
+```
 
-## Future Integration Plan
+Enable **Fused Room Point Cloud** in the diagnostic RViz display. The retained
+exporter saves `maps/spatial_mapping/front_room.ply` every five seconds when new
+valid fused data arrives; `/save_fused_map` requests an immediate save. ZED's
+`maps/area_memory/front.area` is separate localization memory. Neither is used
+by the RTAB-Map profile. Run one camera stack at a time.
 
-Only add the next phase after the ZED baseline is measured.
+## Configuration and tests
 
-1. Motion-facing odometry and localization-health adapter using standard ROS 2 messages.
-2. Python detector for gates and selected competition objects.
-3. Timestamp-synchronized depth-based 3D object localization.
-4. Minimal semantic observation interfaces.
-5. C++ persistent world-model node publishing map-frame objects.
-6. Bottom-camera perception as a separate node if a chosen task requires it.
-7. Jetson profiling followed by ONNX/TensorRT only if needed.
-8. RTAB-Map comparison only if ZED Area Memory is inadequate.
-9. Gazebo for AUV dynamics/interface testing or Isaac Sim for simulated ZED testing when either has a specific test objective.
+- `config/zed_front_rtabmap.yaml`: sensor and smooth local odometry settings.
+- `config/rtabmap.yaml`: SLAM, synchronization and cloud settings.
+- `ros_ws/src/vision_bringup/launch/zed_front.launch.py`: shared camera, fixed TF,
+  optional diagnostic exporter and RViz startup.
+- `ros_ws/src/vision_bringup/launch/zed_rtabmap.launch.py`: database mode and RTAB-Map.
+- [Architecture](docs/architecture.md): TF ownership and source-derived topic table.
+- [Testing procedure](docs/replay_testing.md): bedroom, restart, replay and diagnostics.
 
-PID control, thruster output, vehicle stabilization, mission planning, and autonomy decisions remain outside this repository.
+Topics can be overridden with `rgb_topic`, `depth_topic`, `camera_info_topic`, and
+`odom_topic`; confirm them against the actual running wrapper. `serial_number`,
+`start_rviz`, and `camera_to_base_{x,y,z,roll,pitch,yaw}` pass through to camera
+bringup. Mount transforms still default to zero until measured.
+
+After building, run the tests from `ros_ws/`:
+
+```bash
+source install/setup.bash
+colcon test --packages-select vision_bringup --event-handlers console_direct+
+colcon test-result --verbose
+```
+
+The suite checks launch contracts, installed assets, database path handling, and
+real RTAB-Map startup with the project parameters. It does not certify camera
+tracking, accumulated geometry, loop closure, or relocalization without sensor data.
