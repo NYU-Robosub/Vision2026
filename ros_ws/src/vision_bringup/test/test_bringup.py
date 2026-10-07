@@ -11,7 +11,7 @@ import pytest
 import yaml
 from ament_index_python.packages import get_package_prefix, get_package_share_directory
 from launch import LaunchContext
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, LogInfo
 from launch.utilities import normalize_to_list_of_substitutions, perform_substitutions
 from launch_ros.actions import Node
 from launch_ros.utilities import evaluate_parameters
@@ -177,6 +177,43 @@ def test_slam_composition(launches, tmp_path, mode, replay):
         clock = action._Node__parameters[0]
         clock = {key: value for key, value in clock.items() if text(camera_context, key) == 'use_sim_time'}
         assert evaluate_parameters(camera_context, [clock])[0]['use_sim_time'] is replay
+        
+TOPICS = {
+    'rgb_topic': '/rgb', 'depth_topic': '/depth',
+    'camera_info_topic': '/info', 'odom_topic': '/odom',
+}
+
+
+@pytest.mark.parametrize('replay', [False, True])
+@pytest.mark.parametrize('mode', ['mapping', 'localization'])
+def test_startup_summary_lists_configuration(launches, tmp_path, mode, replay):
+    _, slam, _ = launches
+    database = tmp_path / 'room.db'
+    database.write_bytes(b'database fixture')
+    svo = tmp_path / 'room.svo2'
+    svo.touch()
+    context = context_with_defaults(
+        slam, database_path=str(database), mode=mode, svo_path=str(svo) if replay else 'live')
+    reports = [text(context, action.msg) for action in slam.launch_setup(context)
+               if isinstance(action, LogInfo)]
+    report = next(r for r in reports if 'Vision bring-up summary' in r)
+    assert mode in report
+    assert str(database) in report
+    assert '36534008' in report
+    assert '/rtabmap/cloud_map' in report
+    assert 'map -> odom' in report
+    assert ('SVO replay' in report) is replay
+    assert ('LIVE ZED' in report) is not replay
+
+
+def test_summary_warns_only_when_mapping_extends_a_database(launches, tmp_path):
+    _, slam, _ = launches
+    existing = tmp_path / 'room.db'
+    existing.write_bytes(b'x')
+    assert 'WARN' in slam.startup_summary('mapping', str(existing), 'live', '1', TOPICS)
+    assert 'WARN' not in slam.startup_summary('localization', str(existing), 'live', '1', TOPICS)
+    assert 'WARN' not in slam.startup_summary(
+        'mapping', str(tmp_path / 'new.db'), 'live', '1', TOPICS)
 
 
 def test_missing_replay_fails_before_starting_camera(launches, tmp_path):
