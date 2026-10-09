@@ -16,4 +16,6 @@ if [[ -f "${REPO_ROOT}/ros_ws/install/setup.bash" ]]; then
 fi
 set -u
 
+echo "[run_front] repo: ${REPO_ROOT}"
+echo "[run_front] launch args: ${*:-<defaults>}"
 ros2 launch vision_bringup zed_rtabmap.launch.py "$@"
