@@ -92,3 +92,39 @@ Suggested ownership:
 - Dataset / setup: fixed dataset version, environment, dependencies, and reproducibility setup
 - Baseline training: final training configuration and trained weights
 - Evaluation / reproduction: metrics, predictions, and independent reproduction test
+## Baseline Results
+
+The first baseline detector was trained on RoboSub v3 using YOLOv8n.
+
+Training configuration:
+
+- Model: YOLOv8n
+- Epochs: 50
+- Image size: 640
+- Batch size: 16
+- Seed: 42
+- Ultralytics: 8.4.174
+
+Test set:
+
+- 13 images
+- 39 labeled instances
+
+Results:
+
+- Precision: 0.994
+- Recall: 1.000
+- mAP50: 0.995
+- mAP50-95: 0.909
+
+Per-class mAP50-95:
+
+- `gate`: 0.977
+- `gate_leg_l`: 0.819
+- `gate_leg_r`: 0.932
+
+The test set did not contain ground-truth examples of `gate_blue`, so that class was not independently evaluated.
+
+Qualitative inspection of the test predictions showed that the model consistently detected the full gate and both gate legs across the available test images.
+
+This model is intended as a simple first baseline rather than a final production detector. The goal is to establish a working, reproducible training pipeline that can be improved with additional data, labeling cleanup, and broader underwater testing.
