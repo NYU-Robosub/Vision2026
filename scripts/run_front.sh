@@ -74,5 +74,7 @@ trap 'write_metadata "$?" "$@"' EXIT
   echo "[run_front] repo: ${REPO_ROOT}"
   echo "[run_front] launch args: ${*:-<defaults>}"
   echo "[run_front] logs: ${RUN_DIR}"
+  python3 "${SCRIPT_DIR}/vision_logs.py" prune --protect "${RUN_DIR}" \
+    || echo "[run_front] WARNING: could not prune old logs; continuing."
   ros2 launch vision_bringup zed_rtabmap.launch.py "$@"
 } 2>&1 | tee "${RUN_DIR}/console.log"

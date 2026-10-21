@@ -1,5 +1,7 @@
 """Launch contracts and database preservation; no camera or SLAM mocks required."""
 
+import os
+import time
 import json
 import importlib.util
 from pathlib import Path
@@ -292,6 +294,46 @@ def test_no_run_folder_means_no_config_file(launches):
     _, slam, _ = launches
     assert slam.write_run_config(None, {'mode': 'mapping'}) is None
     
+    
+def load_vision_logs():
+    spec = importlib.util.spec_from_file_location(
+        'vision_logs', REPO / 'scripts' / 'vision_logs.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def make_run(root, name, age_days):
+    run = root / name
+    run.mkdir(parents=True)
+    (run / 'console.log').write_text('x')
+    stamp = time.time() - age_days * 86400
+    os.utime(run, (stamp, stamp))
+    return run
+
+
+def test_prune_by_age_protects_current_run_and_other_folders(tmp_path):
+    logs = load_vision_logs()
+    newest = make_run(tmp_path, '2026-10-21_12-00-00', 0)
+    recent = make_run(tmp_path, '2026-10-20_12-00-00', 1)
+    old = make_run(tmp_path, '2026-09-01_12-00-00', 50)
+    unrelated = tmp_path / 'notes'
+    unrelated.mkdir()
+    removed = logs.prune(tmp_path, keep_runs=0, keep_days=14, protect=newest)
+    assert removed == [old]
+    assert not old.exists()
+    assert newest.exists() and recent.exists() and unrelated.exists()
+
+
+def test_prune_by_count_and_dry_run(tmp_path):
+    logs = load_vision_logs()
+    runs = [make_run(tmp_path, f'2026-10-{day:02d}_12-00-00', 0) for day in (18, 19, 20, 21)]
+    would = logs.prune(tmp_path, keep_runs=2, keep_days=0, dry_run=True)
+    assert sorted(would) == sorted(runs[:2])
+    assert all(run.exists() for run in runs)
+    logs.prune(tmp_path, keep_runs=2, keep_days=0)
+    assert [run.exists() for run in runs] == [False, False, True, True]
+
 
 @pytest.mark.parametrize('case', ['relative', 'missing', 'directory'])
 def test_svo_errors_explain_what_to_check(launches, tmp_path, case):
