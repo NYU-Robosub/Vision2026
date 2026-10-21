@@ -599,6 +599,48 @@ def test_clear_command_previews_then_deletes(tmp_path, monkeypatch, capsys):
         logs.main(['clear'])
 
 
+FAKE_ROS2 = """#!/usr/bin/env bash
+case "$1" in
+  pkg) exit 0 ;;
+  run) echo "$$" > "$FAKE_MONITOR_PID"; exec sleep 60 ;;
+  launch) echo "fake launch failed"; exit 1 ;;
+esac
+"""
+
+
+def test_run_front_stops_monitor_and_records_exit_status(tmp_path):
+    fake_bin = tmp_path / 'bin'
+    fake_bin.mkdir()
+    fake = fake_bin / 'ros2'
+    fake.write_text(FAKE_ROS2)
+    fake.chmod(0o755)
+    monitor_pid = tmp_path / 'monitor.pid'
+    env = dict(
+        os.environ,
+        PATH=f'{fake_bin}:{os.environ["PATH"]}',
+        VISION_LOG_ROOT=str(tmp_path / 'logs'),
+        FAKE_MONITOR_PID=str(monitor_pid),
+        ROS_DISTRO='none-needed',
+    )
+    started = time.time()
+    result = subprocess.run(
+        ['bash', str(REPO / 'scripts' / 'run_front.sh'), 'mode:=mapping'],
+        env=env, capture_output=True, text=True, timeout=30)
+    assert time.time() - started < 20
+    assert result.returncode == 1
+    assert 'fake launch failed' in result.stdout
+    run = next((tmp_path / 'logs').iterdir())
+    assert 'fake launch failed' in (run / 'console.log').read_text()
+    metadata = json.loads((run / 'metadata.json').read_text())
+    assert metadata['exit_status'] == 1
+    assert metadata['launch_args'] == ['mode:=mapping']
+    assert monitor_pid.exists()
+    pid = int(monitor_pid.read_text())
+    time.sleep(0.5)
+    with pytest.raises(ProcessLookupError):
+        os.kill(pid, 0)
+
+
 @pytest.mark.parametrize('case', ['relative', 'missing', 'directory'])
 def test_svo_errors_explain_what_to_check(launches, tmp_path, case):
     front, _, _ = launches

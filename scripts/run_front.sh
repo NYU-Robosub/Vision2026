@@ -76,5 +76,27 @@ trap 'write_metadata "$?" "$@"' EXIT
   echo "[run_front] logs: ${RUN_DIR}"
   python3 "${SCRIPT_DIR}/vision_logs.py" prune --protect "${RUN_DIR}" \
     || echo "[run_front] WARNING: could not prune old logs; continuing."
+  MONITOR_PID=""
+  if [[ "${VISION_STATUS_MONITOR:-1}" != "0" ]] && ros2 pkg prefix vision_status >/dev/null 2>&1; then
+    echo "[run_front] starting runtime status monitor (VISION_STATUS_MONITOR=0 turns it off)"
+    setsid ros2 run vision_status vision_status --ros-args \
+      -p rgb_topic:=/zed_front/zed_node/rgb/color/rect/image \
+      -p depth_topic:=/zed_front/zed_node/depth/depth_registered \
+      -p camera_info_topic:=/zed_front/zed_node/rgb/color/rect/camera_info \
+      -p odometry_topic:=/zed_front/zed_node/odom &
+    MONITOR_PID=$!
+  else
+    echo "[run_front] runtime status monitor not started (vision_status not installed, or disabled)"
+  fi
+  # A failing launch must still stop the monitor and report its own exit status.
+  set +e
   ros2 launch vision_bringup zed_rtabmap.launch.py "$@"
+  LAUNCH_STATUS=$?
+  set -e
+  if [[ -n "${MONITOR_PID}" ]]; then
+    # setsid gave the monitor its own process group; stop the whole group.
+    kill -TERM -- "-${MONITOR_PID}" 2>/dev/null || kill -TERM "${MONITOR_PID}" 2>/dev/null || true
+    wait "${MONITOR_PID}" 2>/dev/null || true
+  fi
+  exit "${LAUNCH_STATUS}"
 } 2>&1 | tee "${RUN_DIR}/console.log"
