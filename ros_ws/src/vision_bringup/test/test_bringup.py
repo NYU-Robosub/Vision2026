@@ -417,6 +417,52 @@ def test_tail_command_prints_last_lines_and_reports_missing_log(
     assert logs.main(['tail']) == 1
     assert 'does not exist' in capsys.readouterr().err
 
+
+SAMPLE_LOG = [
+    '[INFO] [launch]: start\n',
+    '[WARN] [1792607599.5] [vision_status]: rgb: data timed out\n',
+    '[ERROR] [launch]: Caught exception: bad\n',
+    'Check:\n',
+    '  - fix it\n',
+    '[WARNING] [vision_bringup]: mapping will extend\n',
+]
+
+
+def test_search_filters_by_level_node_and_text():
+    logs = load_vision_logs()
+
+    def matched(results):
+        return [number for number, _, hit in results if hit]
+
+    assert matched(logs.search_lines(SAMPLE_LOG, level='WARN')) == [2, 6]
+    assert matched(logs.search_lines(SAMPLE_LOG, min_level='ERROR')) == [3, 4, 5]
+    assert matched(logs.search_lines(SAMPLE_LOG, node='vision_status')) == [2]
+    assert matched(logs.search_lines(SAMPLE_LOG, text='TIMED OUT')) == [2]
+
+
+def test_search_context_marks_matches_and_separates_groups():
+    logs = load_vision_logs()
+    results = logs.search_lines(SAMPLE_LOG, text='timed out', context=1)
+    assert [(number, hit) for number, _, hit in results] == [(1, False), (2, True), (3, False)]
+    gaps = logs.format_search('run', logs.search_lines(SAMPLE_LOG, level='WARN'))
+    assert '--' in gaps
+
+
+def test_search_command_covers_runs_and_requires_a_filter(tmp_path, monkeypatch, capsys):
+    logs = load_vision_logs()
+    monkeypatch.setenv('VISION_LOG_ROOT', str(tmp_path))
+    first = make_run(tmp_path, '2026-10-20_12-00-00', 1)
+    second = make_run(tmp_path, '2026-10-21_12-00-00', 0)
+    (first / 'console.log').write_text(''.join(SAMPLE_LOG))
+    (second / 'console.log').write_text('[INFO] [launch]: fine\n')
+    assert logs.main(['search', '--all', '--level', 'WARN']) == 0
+    out = capsys.readouterr().out
+    assert '2026-10-20_12-00-00:2:' in out
+    assert '2026-10-21_12-00-00' not in out
+    assert logs.main(['search']) == 1
+    assert 'at least one' in capsys.readouterr().err
+
+
 @pytest.mark.parametrize('case', ['relative', 'missing', 'directory'])
 def test_svo_errors_explain_what_to_check(launches, tmp_path, case):
     front, _, _ = launches

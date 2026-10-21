@@ -101,6 +101,59 @@ def follow(path, offset, poll=0.5):
                 time.sleep(poll)
 
 
+LEVELS = {'DEBUG': 10, 'INFO': 20, 'WARN': 30, 'ERROR': 40, 'FATAL': 50}
+LOG_LINE = re.compile(
+    r'^\[(DEBUG|INFO|WARN|WARNING|ERROR|FATAL)\]\s*(?:\[\d+(?:\.\d+)?\]\s*)?\[([^\]]+)\]')
+
+
+def parse_level(name):
+    name = name.upper()
+    return 'WARN' if name == 'WARNING' else name
+
+
+def classify(lines):
+    """(level, node) for each line. Lines without a prefix, such as the 'Check:'
+    list under an error, belong to the record above them."""
+    level, node, result = None, None, []
+    for line in lines:
+        match = LOG_LINE.match(line)
+        if match:
+            level, node = parse_level(match.group(1)), match.group(2)
+        result.append((level, node))
+    return result
+
+
+def search_lines(lines, text=None, level=None, min_level=None, node=None, context=0):
+    """Lines matching every filter plus `context` lines around each: (number, line, matched)."""
+    needle = text.lower() if text else None
+    hits = []
+    for index, (line, (line_level, line_node)) in enumerate(zip(lines, classify(lines))):
+        if level and line_level != level:
+            continue
+        if min_level and (line_level is None or LEVELS[line_level] < LEVELS[min_level]):
+            continue
+        if node and (line_node is None or node.lower() not in line_node.lower()):
+            continue
+        if needle and needle not in line.lower():
+            continue
+        hits.append(index)
+    shown = {}
+    for index in hits:
+        for near in range(max(0, index - context), min(len(lines), index + context + 1)):
+            shown[near] = shown.get(near, False) or near == index
+    return [(near + 1, lines[near].rstrip('\n'), shown[near]) for near in sorted(shown)]
+
+
+def format_search(run_name, results):
+    out, previous = [], None
+    for number, line, matched in results:
+        if previous is not None and number != previous + 1:
+            out.append('--')
+        out.append(f'{run_name}:{number}{":" if matched else "-"} {line}')
+        previous = number
+    return out
+    
+
 def resolve_run(root, name):
     """Run folder for 'latest', an exact folder name, or a unique prefix."""
     runs = list_runs(root)
@@ -195,6 +248,17 @@ def main(argv=None):
     tail.add_argument('-n', '--lines', type=int, default=40, help='lines to show (default 40)')
     tail.add_argument('-f', '--follow', action='store_true',
                       help='keep printing new lines; stop with Ctrl+C')
+    search = commands.add_parser('search', help='search the console logs')
+    search.add_argument('run', nargs='?', default='latest',
+                        help="'latest' (default), a run folder name, or a unique prefix")
+    search.add_argument('--all', action='store_true', help='search every run')
+    search.add_argument('--text', help='keep lines containing this text (not case sensitive)')
+    search.add_argument('--level', type=parse_level, choices=list(LEVELS),
+                        help='keep only this level')
+    search.add_argument('--min-level', type=parse_level, choices=list(LEVELS),
+                        help='keep this level and above')
+    search.add_argument('--node', help='keep lines from nodes whose name contains this')
+    search.add_argument('--context', type=int, default=0, help='lines to show around a match')
     cleanup = commands.add_parser('prune', help='delete old run folders')
     cleanup.add_argument('--keep-runs', type=int, default=env_int('VISION_LOG_KEEP_RUNS', 30))
     cleanup.add_argument('--keep-days', type=int, default=env_int('VISION_LOG_KEEP_DAYS', 14))
@@ -229,6 +293,28 @@ def main(argv=None):
                     sys.stdout.flush()
             except KeyboardInterrupt:
                 pass
+    elif args.command == 'search':
+        if not (args.text or args.level or args.min_level or args.node):
+            print('[vision_logs] give at least one of --text, --level, --min-level, --node',
+                  file=sys.stderr)
+            return 1
+        try:
+            runs = list_runs(root) if args.all else [resolve_run(root, args.run)]
+        except ValueError as error:
+            print(f'[vision_logs] {error}', file=sys.stderr)
+            return 1
+        total = 0
+        for run in runs:
+            log = run / 'console.log'
+            if not log.is_file():
+                continue
+            lines = log.read_text(errors='replace').splitlines()
+            results = search_lines(
+                lines, args.text, args.level, args.min_level, args.node, args.context)
+            if results:
+                total += sum(1 for _, _, matched in results if matched)
+                print('\n'.join(format_search(run.name, results)))
+        print(f'[vision_logs] {total} matching line(s) in {len(runs)} run(s)', file=sys.stderr)
     elif args.command == 'prune':
         removed = prune(root, args.keep_runs, args.keep_days, args.protect, args.dry_run)
         verb = 'would remove' if args.dry_run else 'removed'
