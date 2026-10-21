@@ -12,7 +12,8 @@ import yaml
 from ament_index_python.packages import (
     PackageNotFoundError, get_package_prefix, get_package_share_directory)
 from launch import LaunchContext
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, LogInfo
+from launch.actions import (
+    DeclareLaunchArgument, IncludeLaunchDescription, LogInfo, RegisterEventHandler)
 from launch.utilities import normalize_to_list_of_substitutions, perform_substitutions
 from launch_ros.actions import Node
 from launch_ros.utilities import evaluate_parameters
@@ -243,6 +244,22 @@ def test_serial_mismatch_warns_only_when_yaml_disagrees(launches, tmp_path):
     assert any('111' in w for w in slam.startup_warnings('localization', database, '222', str(config)))
     assert not slam.startup_warnings('localization', database, '111', str(config))
     assert not slam.startup_warnings('localization', database, '222', str(tmp_path / 'none.yaml'))
+
+
+def test_rtabmap_exit_reports_what_to_check(launches):
+    _, slam, _ = launches
+    level, message = slam.rtabmap_exit_report(0, '/room.db')
+    assert level == 'info'
+    level, message = slam.rtabmap_exit_report(1, '/room.db')
+    assert level == 'error'
+    assert 'Check:' in message and '/room.db' in message
+
+
+def test_rtabmap_exit_handler_is_registered(launches, tmp_path):
+    _, slam, _ = launches
+    context = context_with_defaults(slam, database_path=str(tmp_path / 'room.db'))
+    assert any(isinstance(action, RegisterEventHandler)
+               for action in slam.launch_setup(context))
 
 
 def test_missing_replay_fails_before_starting_camera(launches, tmp_path):

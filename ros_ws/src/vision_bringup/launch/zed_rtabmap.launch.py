@@ -5,12 +5,15 @@ import yaml
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, LogInfo, OpaqueFunction
+from launch.actions import (
+    DeclareLaunchArgument, IncludeLaunchDescription, LogInfo, OpaqueFunction,
+    RegisterEventHandler)
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch.logging import get_logger
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
+from launch.event_handlers import OnProcessExit
 
 
 def failure(problem, *checks):
@@ -118,7 +121,27 @@ def warn(message):
     def log(context):
         get_logger('vision_bringup').warning(message)
     return OpaqueFunction(function=log)    
-    
+
+
+def rtabmap_exit_report(returncode, database):
+    """Level and message to log when the RTAB-Map process ends."""
+    if returncode == 0:
+        return 'info', f'RTAB-Map exited normally. Database: {database}'
+    return 'error', (
+        f'RTAB-Map exited with code {returncode}.\n'
+        'Check:\n'
+        f'  - Can {database} be opened? It may be corrupt or locked by another run.\n'
+        '  - Are the camera topics publishing? Odometry and RGB-D data are required.\n'
+        '  - Read the lines above this one for the RTAB-Map message that explains why.\n'
+        '  - Was the config file valid? See rtabmap.yaml.')
+
+
+def on_rtabmap_exit(database):
+    def handler(event, context):
+        level, message = rtabmap_exit_report(event.returncode, database)
+        getattr(get_logger('vision_bringup'), level)(message)
+        return []
+    return handler    
     
 def launch_setup(context):
 
@@ -131,7 +154,7 @@ def launch_setup(context):
     summary = startup_summary(
         mode, database, LaunchConfiguration('svo_path').perform(context),
         LaunchConfiguration('serial_number').perform(context), topics)
-    return [
+    actions = [
         LogInfo(msg=summary),
         *[warn(message) for message in startup_warnings(
             mode, database,
@@ -170,6 +193,10 @@ def launch_setup(context):
             ],
         ),
     ]
+    rtabmap = next(action for action in actions if isinstance(action, Node))
+    actions.append(RegisterEventHandler(
+        OnProcessExit(target_action=rtabmap, on_exit=on_rtabmap_exit(database))))
+    return actions
 
 
 def generate_launch_description():
