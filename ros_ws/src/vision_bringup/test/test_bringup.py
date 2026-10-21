@@ -335,6 +335,24 @@ def test_prune_by_count_and_dry_run(tmp_path):
     assert [run.exists() for run in runs] == [False, False, True, True]
 
 
+def test_list_shows_runs_with_status_and_size(tmp_path):
+    logs = load_vision_logs()
+    run = make_run(tmp_path, '2026-10-21_12-00-00', 0)
+    (run / 'metadata.json').write_text(
+        json.dumps({'exit_status': 1, 'git_revision': 'abc1234'}))
+    (run / 'launch_config.json').write_text(json.dumps({'mode': 'mapping', 'input': 'live'}))
+    report = logs.format_runs(tmp_path, logs.list_runs(tmp_path))
+    for expected in ('2026-10-21_12-00-00', 'mapping', 'live', 'abc1234', '1 run(s)'):
+        assert expected in report
+    assert logs.describe_run(run)['exit'] == '1'
+
+
+def test_list_handles_missing_folder(tmp_path):
+    logs = load_vision_logs()
+    missing = tmp_path / 'none'
+    assert '0 run(s)' in logs.format_runs(missing, logs.list_runs(missing))
+    
+
 @pytest.mark.parametrize('case', ['relative', 'missing', 'directory'])
 def test_svo_errors_explain_what_to_check(launches, tmp_path, case):
     front, _, _ = launches
