@@ -224,14 +224,14 @@ def test_startup_summary_lists_configuration(launches, tmp_path, mode, replay):
     assert ('LIVE ZED' in report) is not replay
 
 
-def test_summary_warns_only_when_mapping_extends_a_database(launches, tmp_path):
+def test_warnings_only_when_mapping_extends_a_database(launches, tmp_path):
     _, slam, _ = launches
     existing = tmp_path / 'room.db'
     existing.write_bytes(b'x')
-    assert 'WARN' in slam.startup_summary('mapping', str(existing), 'live', '1', TOPICS)
-    assert 'WARN' not in slam.startup_summary('localization', str(existing), 'live', '1', TOPICS)
-    assert 'WARN' not in slam.startup_summary(
-        'mapping', str(tmp_path / 'new.db'), 'live', '1', TOPICS)
+    assert slam.startup_warnings('mapping', str(existing))
+    assert not slam.startup_warnings('localization', str(existing))
+    assert not slam.startup_warnings('mapping', str(tmp_path / 'new.db'))
+    assert 'WARN' not in slam.startup_summary('mapping', str(existing), 'live', '1', TOPICS)
 
 
 def test_missing_replay_fails_before_starting_camera(launches, tmp_path):

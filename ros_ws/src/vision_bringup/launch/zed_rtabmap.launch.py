@@ -7,6 +7,7 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, LogInfo, OpaqueFunction
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
+from launch.logging import get_logger
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
@@ -78,10 +79,24 @@ def startup_summary(mode, database, svo, serial, topics):
         '  map -> odom                   : RTAB-Map (ZED map TF disabled)',
         '  URDF / static frames          : robot_state_publisher',
     ]
-    if mode == 'mapping' and path.is_file():
-        lines.append('WARN: mapping will extend the existing database; '
-                     'pass database_path:=<new file> for a fresh map')
     return '\n'.join(lines)
+
+
+def startup_warnings(mode, database):
+    """Risky-but-legal configurations, reported at WARN severity."""
+    warnings = []
+    if mode == 'mapping' and Path(database).is_file():
+        warnings.append(
+            f'mapping will extend the existing database {database}. '
+            'Check: pass database_path:=<new file> if you want a fresh map.')
+    return warnings
+
+
+def warn(message):
+    """Launch action that logs a real WARN-level message when it runs."""
+    def log(context):
+        get_logger('vision_bringup').warning(message)
+    return OpaqueFunction(function=log)    
     
     
 def launch_setup(context):
@@ -97,6 +112,7 @@ def launch_setup(context):
         LaunchConfiguration('serial_number').perform(context), topics)
     return [
         LogInfo(msg=summary),
+        *[warn(message) for message in startup_warnings(mode, database)],
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(str(share / 'launch/zed_front.launch.py')),
             launch_arguments={
