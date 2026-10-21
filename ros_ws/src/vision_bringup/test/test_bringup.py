@@ -463,6 +463,52 @@ def test_search_command_covers_runs_and_requires_a_filter(tmp_path, monkeypatch,
     assert 'at least one' in capsys.readouterr().err
 
 
+def test_parse_time_accepts_relative_and_utc_values():
+    logs = load_vision_logs()
+    assert logs.parse_time('2h', now=10000) == 10000 - 7200
+    assert logs.parse_time('1d', now=100000) == 100000 - 86400
+    assert logs.parse_time('2026-10-21T18:41:00') == 1792608060
+    assert logs.parse_time('2026-10-21 18:41') == 1792608060
+    assert logs.parse_time('2026-10-21') == 1792540800
+    with pytest.raises(ValueError, match='cannot read time'):
+        logs.parse_time('yesterday')
+
+
+def test_search_by_time_uses_node_times_and_inherits_for_other_lines():
+    logs = load_vision_logs()
+    lines = [
+        '[INFO] [launch]: start\n',
+        '[WARN] [100.5] [vision_status]: early\n',
+        'Check: early detail\n',
+        '[WARN] [200.5] [vision_status]: late\n',
+    ]
+    times = logs.line_times(lines, start=50.0)
+    assert times == [50.0, 100.5, 100.5, 200.5]
+
+    def matched(**options):
+        results = logs.search_lines(lines, times=times, **options)
+        return [number for number, _, hit in results if hit]
+
+    assert matched(since=150) == [4]
+    assert matched(until=150) == [1, 2, 3]
+    assert matched(since=60, until=150) == [2, 3]
+
+
+def test_search_command_filters_by_time(tmp_path, monkeypatch, capsys):
+    logs = load_vision_logs()
+    monkeypatch.setenv('VISION_LOG_ROOT', str(tmp_path))
+    run = make_run(tmp_path, '2026-10-21_12-00-00', 0)
+    (run / 'metadata.json').write_text(json.dumps({'started_utc': '2026-10-21T12:00:00Z'}))
+    (run / 'console.log').write_text(
+        '[WARN] [1792584100.0] [vision_status]: early\n'
+        '[WARN] [1792591200.0] [vision_status]: late\n')
+    assert logs.main(['search', '--since', '2026-10-21T13:00']) == 0
+    out = capsys.readouterr().out
+    assert 'late' in out and 'early' not in out
+    assert logs.main(['search', '--since', 'someday']) == 1
+    assert 'cannot read time' in capsys.readouterr().err
+
+
 @pytest.mark.parametrize('case', ['relative', 'missing', 'directory'])
 def test_svo_errors_explain_what_to_check(launches, tmp_path, case):
     front, _, _ = launches

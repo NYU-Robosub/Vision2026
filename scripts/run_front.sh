@@ -18,7 +18,7 @@ set -u
 
 # One folder per run. Override the location with VISION_LOG_ROOT.
 LOG_ROOT="${VISION_LOG_ROOT:-${HOME}/.ros/robosub/logs}"
-RUN_DIR="${LOG_ROOT}/$(date +%Y-%m-%d_%H-%M-%S)"
+RUN_DIR="${LOG_ROOT}/$(date -u +%Y-%m-%d_%H-%M-%S)"
 mkdir -p "${RUN_DIR}/ros"
 export ROS_LOG_DIR="${RUN_DIR}/ros"
 export VISION_RUN_DIR="${RUN_DIR}"

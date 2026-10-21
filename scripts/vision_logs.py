@@ -2,6 +2,7 @@
 """Manage the per-run log folders written by scripts/run_front.sh."""
 
 import argparse
+import datetime
 import json
 import os
 import re
@@ -123,7 +124,8 @@ def classify(lines):
     return result
 
 
-def search_lines(lines, text=None, level=None, min_level=None, node=None, context=0):
+def search_lines(lines, text=None, level=None, min_level=None, node=None, context=0,
+                 times=None, since=None, until=None):
     """Lines matching every filter plus `context` lines around each: (number, line, matched)."""
     needle = text.lower() if text else None
     hits = []
@@ -136,6 +138,11 @@ def search_lines(lines, text=None, level=None, min_level=None, node=None, contex
             continue
         if needle and needle not in line.lower():
             continue
+        if times is not None:
+            if since is not None and times[index] < since:
+                continue
+            if until is not None and times[index] > until:
+                continue
         hits.append(index)
     shown = {}
     for index in hits:
@@ -152,6 +159,52 @@ def format_search(run_name, results):
         out.append(f'{run_name}:{number}{":" if matched else "-"} {line}')
         previous = number
     return out
+ 
+ 
+LINE_TIME = re.compile(
+    r'^\[(?:DEBUG|INFO|WARN|WARNING|ERROR|FATAL)\]\s*\[(\d+(?:\.\d+)?)\]')
+
+
+def parse_time(value, now=None):
+    """Epoch seconds from '30m', '2h', '1d' (ago) or a UTC time like 2026-10-21T18:41."""
+    now = time.time() if now is None else now
+    text = value.strip()
+    match = re.fullmatch(r'(\d+)([smhd])', text)
+    if match:
+        unit = {'s': 1, 'm': 60, 'h': 3600, 'd': 86400}[match.group(2)]
+        return now - int(match.group(1)) * unit
+    for fmt in ('%Y-%m-%dT%H:%M:%S', '%Y-%m-%dT%H:%M', '%Y-%m-%d'):
+        try:
+            parsed = datetime.datetime.strptime(text.replace(' ', 'T'), fmt)
+        except ValueError:
+            continue
+        return parsed.replace(tzinfo=datetime.timezone.utc).timestamp()
+    raise ValueError(
+        f"cannot read time '{value}'. Use 30m, 2h, 1d, or a UTC time like 2026-10-21T18:41")
+
+
+def run_start(run):
+    """When a run started (epoch seconds): metadata.json first, then the folder name (UTC)."""
+    stamp = read_json(run / 'metadata.json').get('started_utc')
+    for value, fmt in ((stamp, '%Y-%m-%dT%H:%M:%SZ'), (run.name, '%Y-%m-%d_%H-%M-%S')):
+        if value:
+            try:
+                parsed = datetime.datetime.strptime(value, fmt)
+            except ValueError:
+                continue
+            return parsed.replace(tzinfo=datetime.timezone.utc).timestamp()
+    return run.stat().st_mtime
+
+
+def line_times(lines, start):
+    """Best-known time of each line. Node lines carry their own; others take the last seen."""
+    current, result = start, []
+    for line in lines:
+        match = LINE_TIME.match(line)
+        if match:
+            current = float(match.group(1))
+        result.append(current)
+    return result
     
 
 def resolve_run(root, name):
@@ -258,6 +311,9 @@ def main(argv=None):
     search.add_argument('--min-level', type=parse_level, choices=list(LEVELS),
                         help='keep this level and above')
     search.add_argument('--node', help='keep lines from nodes whose name contains this')
+    search.add_argument('--since', help='keep lines at or after this time: 30m, 2h, 1d ago, '
+                                        'or a UTC time like 2026-10-21T18:41')
+    search.add_argument('--until', help='keep lines at or before this time (same formats)')
     search.add_argument('--context', type=int, default=0, help='lines to show around a match')
     cleanup = commands.add_parser('prune', help='delete old run folders')
     cleanup.add_argument('--keep-runs', type=int, default=env_int('VISION_LOG_KEEP_RUNS', 30))
@@ -294,11 +350,14 @@ def main(argv=None):
             except KeyboardInterrupt:
                 pass
     elif args.command == 'search':
-        if not (args.text or args.level or args.min_level or args.node):
-            print('[vision_logs] give at least one of --text, --level, --min-level, --node',
-                  file=sys.stderr)
+        if not (args.text or args.level or args.min_level or args.node
+                or args.since or args.until):
+            print('[vision_logs] give at least one of --text, --level, --min-level, --node, '
+                  '--since, --until', file=sys.stderr)
             return 1
         try:
+            since = parse_time(args.since) if args.since else None
+            until = parse_time(args.until) if args.until else None
             runs = list_runs(root) if args.all else [resolve_run(root, args.run)]
         except ValueError as error:
             print(f'[vision_logs] {error}', file=sys.stderr)
@@ -310,7 +369,8 @@ def main(argv=None):
                 continue
             lines = log.read_text(errors='replace').splitlines()
             results = search_lines(
-                lines, args.text, args.level, args.min_level, args.node, args.context)
+                lines, args.text, args.level, args.min_level, args.node, args.context,
+                times=line_times(lines, run_start(run)), since=since, until=until)
             if results:
                 total += sum(1 for _, _, matched in results if matched)
                 print('\n'.join(format_search(run.name, results)))
