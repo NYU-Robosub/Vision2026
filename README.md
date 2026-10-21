@@ -141,3 +141,6 @@ colcon test-result --verbose
 The suite checks launch contracts, installed assets, database path handling, and
 real RTAB-Map startup with the project parameters. It does not certify camera
 tracking, accumulated geometry, loop closure, or relocalization without sensor data.
+
+
+Run logs and troubleshooting: see [docs/logging.md](docs/logging.md).

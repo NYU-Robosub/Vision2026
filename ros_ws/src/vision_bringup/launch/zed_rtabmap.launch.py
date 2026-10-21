@@ -1,5 +1,6 @@
 """Room mapping and localization using ZED RGB-D and ZED local odometry."""
-
+import json
+import os
 from pathlib import Path
 import yaml
 
@@ -142,6 +143,19 @@ def on_rtabmap_exit(database):
         getattr(get_logger('vision_bringup'), level)(message)
         return []
     return handler    
+
+
+def write_run_config(run_dir, config):
+    """Save the resolved configuration next to the run's metadata.json."""
+    if not run_dir:
+        return None
+    path = Path(run_dir) / 'launch_config.json'
+    try:
+        path.write_text(json.dumps(config, indent=2, sort_keys=True) + '\n')
+    except OSError:
+        return None  # Never stop a launch because the log folder is unwritable.
+    return str(path)
+    
     
 def launch_setup(context):
 
@@ -154,6 +168,17 @@ def launch_setup(context):
     summary = startup_summary(
         mode, database, LaunchConfiguration('svo_path').perform(context),
         LaunchConfiguration('serial_number').perform(context), topics)
+    write_run_config(os.environ.get('VISION_RUN_DIR'), {
+        'mode': mode,
+        'database_path': database,
+        'database_existed': Path(database).is_file(),
+        'input': 'svo' if replay else 'live',
+        'svo_path': LaunchConfiguration('svo_path').perform(context),
+        'serial_number': LaunchConfiguration('serial_number').perform(context),
+        'zed_config': LaunchConfiguration('zed_config').perform(context),
+        'rtabmap_config': LaunchConfiguration('rtabmap_config').perform(context),
+        'topics': topics,
+    })
     actions = [
         LogInfo(msg=summary),
         *[warn(message) for message in startup_warnings(
