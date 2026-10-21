@@ -9,7 +9,8 @@ import subprocess
 
 import pytest
 import yaml
-from ament_index_python.packages import get_package_prefix, get_package_share_directory
+from ament_index_python.packages import (
+    PackageNotFoundError, get_package_prefix, get_package_share_directory)
 from launch import LaunchContext
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, LogInfo
 from launch.utilities import normalize_to_list_of_substitutions, perform_substitutions
@@ -239,6 +240,21 @@ def test_missing_replay_fails_before_starting_camera(launches, tmp_path):
     context = context_with_defaults(front, svo_path=str(tmp_path / 'missing.svo2'))
     with pytest.raises(ValueError, match='svo_path'):
         front.launch_setup(context)
+
+
+def test_missing_zed_wrapper_explains_next_step(launches, monkeypatch):
+    front, _, share = launches
+
+    def lookup(name):
+        if name == 'zed_wrapper':
+            raise PackageNotFoundError(name)
+        return str(share)
+
+    monkeypatch.setattr(front, 'get_package_share_directory', lookup)
+    context = context_with_defaults(front)
+    with pytest.raises(ValueError, match='zed_wrapper') as error:
+        front.launch_setup(context)
+    assert 'Check:' in str(error.value)
 
 
 def test_rviz_shows_assembled_map_without_history(launches):
