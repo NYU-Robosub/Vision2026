@@ -1,5 +1,6 @@
 """Launch contracts and database preservation; no camera or SLAM mocks required."""
 
+import tarfile
 import os
 import time
 import json
@@ -507,6 +508,47 @@ def test_search_command_filters_by_time(tmp_path, monkeypatch, capsys):
     assert 'late' in out and 'early' not in out
     assert logs.main(['search', '--since', 'someday']) == 1
     assert 'cannot read time' in capsys.readouterr().err
+
+
+def test_export_archives_the_whole_run_folder(tmp_path):
+    logs = load_vision_logs()
+    run = make_run(tmp_path / 'logs', '2026-10-21_12-00-00', 0)
+    (run / 'metadata.json').write_text('{}')
+    destination = tmp_path / 'share.tar.gz'
+    assert logs.export_run(run, destination) == destination
+    with tarfile.open(destination) as archive:
+        names = archive.getnames()
+    assert '2026-10-21_12-00-00/console.log' in names
+    assert '2026-10-21_12-00-00/metadata.json' in names
+    assert logs.export_run(run, tmp_path) == tmp_path / '2026-10-21_12-00-00.tar.gz'
+
+
+def test_export_refuses_overwrite_and_output_inside_run(tmp_path):
+    logs = load_vision_logs()
+    run = make_run(tmp_path / 'logs', '2026-10-21_12-00-00', 0)
+    destination = tmp_path / 'share.tar.gz'
+    destination.write_bytes(b'keep me')
+    with pytest.raises(ValueError, match='already exists'):
+        logs.export_run(run, destination)
+    assert destination.read_bytes() == b'keep me'
+    logs.export_run(run, destination, force=True)
+    assert destination.read_bytes() != b'keep me'
+    with pytest.raises(ValueError, match='inside the run folder'):
+        logs.export_run(run, run / 'again.tar.gz')
+    with pytest.raises(ValueError, match='does not exist'):
+        logs.export_run(run, tmp_path / 'missing' / 'x.tar.gz')
+
+
+def test_export_command_writes_archive_and_reports_errors(tmp_path, monkeypatch, capsys):
+    logs = load_vision_logs()
+    monkeypatch.setenv('VISION_LOG_ROOT', str(tmp_path / 'logs'))
+    make_run(tmp_path / 'logs', '2026-10-21_12-00-00', 0)
+    destination = tmp_path / 'share.tar.gz'
+    assert logs.main(['export', 'latest', '--output', str(destination)]) == 0
+    assert destination.is_file()
+    assert logs.main(['export', 'latest', '--output', str(destination)]) == 1
+    assert 'already exists' in capsys.readouterr().err
+    assert logs.main(['export', 'nope', '--output', str(tmp_path / 'b.tar.gz')]) == 1
 
 
 @pytest.mark.parametrize('case', ['relative', 'missing', 'directory'])

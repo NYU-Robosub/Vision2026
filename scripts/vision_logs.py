@@ -8,6 +8,7 @@ import os
 import re
 import shutil
 import sys
+import tarfile
 import time
 from pathlib import Path
 from collections import deque
@@ -207,6 +208,22 @@ def line_times(lines, start):
     return result
     
 
+def export_run(run, output, force=False):
+    """Pack one run folder into a .tar.gz and return the archive path."""
+    output = Path(output).expanduser()
+    if output.is_dir():
+        output = output / f'{run.name}.tar.gz'
+    if run.resolve() in output.resolve().parents:
+        raise ValueError('the archive cannot be written inside the run folder it packs')
+    if not output.parent.is_dir():
+        raise ValueError(f'folder {output.parent} does not exist')
+    if output.exists() and not force:
+        raise ValueError(f'{output} already exists; use --force to replace it')
+    with tarfile.open(output, 'w:gz') as archive:
+        archive.add(run, arcname=run.name)
+    return output
+
+
 def resolve_run(root, name):
     """Run folder for 'latest', an exact folder name, or a unique prefix."""
     runs = list_runs(root)
@@ -315,6 +332,12 @@ def main(argv=None):
                                         'or a UTC time like 2026-10-21T18:41')
     search.add_argument('--until', help='keep lines at or before this time (same formats)')
     search.add_argument('--context', type=int, default=0, help='lines to show around a match')
+    export = commands.add_parser('export', help="pack one run's logs and metadata into a .tar.gz")
+    export.add_argument('run', nargs='?', default='latest',
+                        help="'latest' (default), a run folder name, or a unique prefix")
+    export.add_argument('-o', '--output',
+                        help='archive file or existing folder (default: current folder)')
+    export.add_argument('--force', action='store_true', help='replace an existing archive')
     cleanup = commands.add_parser('prune', help='delete old run folders')
     cleanup.add_argument('--keep-runs', type=int, default=env_int('VISION_LOG_KEEP_RUNS', 30))
     cleanup.add_argument('--keep-days', type=int, default=env_int('VISION_LOG_KEEP_DAYS', 14))
@@ -375,6 +398,14 @@ def main(argv=None):
                 total += sum(1 for _, _, matched in results if matched)
                 print('\n'.join(format_search(run.name, results)))
         print(f'[vision_logs] {total} matching line(s) in {len(runs)} run(s)', file=sys.stderr)
+    elif args.command == 'export':
+        try:
+            run = resolve_run(root, args.run)
+            archive = export_run(run, args.output or Path.cwd(), args.force)
+        except (ValueError, OSError) as error:
+            print(f'[vision_logs] {error}', file=sys.stderr)
+            return 1
+        print(f'[vision_logs] wrote {archive} ({human_size(archive.stat().st_size)})')
     elif args.command == 'prune':
         removed = prune(root, args.keep_runs, args.keep_days, args.protect, args.dry_run)
         verb = 'would remove' if args.dry_run else 'removed'
