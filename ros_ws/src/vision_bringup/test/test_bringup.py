@@ -1,5 +1,6 @@
 """Launch contracts and database preservation; no camera or SLAM mocks required."""
 
+import json
 import importlib.util
 from pathlib import Path
 import shutil
@@ -268,6 +269,29 @@ def test_missing_replay_fails_before_starting_camera(launches, tmp_path):
     with pytest.raises(ValueError, match='svo_path'):
         front.launch_setup(context)
 
+
+def test_launch_config_is_saved_in_run_folder(launches, tmp_path, monkeypatch):
+    _, slam, _ = launches
+    run_dir = tmp_path / 'run'
+    run_dir.mkdir()
+    monkeypatch.setenv('VISION_RUN_DIR', str(run_dir))
+    database = tmp_path / 'room.db'
+    database.write_bytes(b'x')
+    context = context_with_defaults(slam, database_path=str(database), mode='localization')
+    slam.launch_setup(context)
+    saved = json.loads((run_dir / 'launch_config.json').read_text())
+    assert saved['mode'] == 'localization'
+    assert saved['database_path'] == str(database)
+    assert saved['database_existed'] is True
+    assert saved['input'] == 'live'
+    assert saved['serial_number'] == '36534008'
+    assert saved['topics']['odom_topic'] == '/zed_front/zed_node/odom'
+
+
+def test_no_run_folder_means_no_config_file(launches):
+    _, slam, _ = launches
+    assert slam.write_run_config(None, {'mode': 'mapping'}) is None
+    
 
 @pytest.mark.parametrize('case', ['relative', 'missing', 'directory'])
 def test_svo_errors_explain_what_to_check(launches, tmp_path, case):
