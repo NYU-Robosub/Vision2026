@@ -224,6 +224,46 @@ def export_run(run, output, force=False):
     return output
 
 
+def parse_age(value):
+    """Seconds in a duration like 30m, 12h or 14d."""
+    match = re.fullmatch(r'(\d+)([smhd])', value.strip())
+    if not match:
+        raise ValueError(
+            f"cannot read age '{value}'. Use a number and a unit, such as 14d, 12h or 30m")
+    return int(match.group(1)) * {'s': 1, 'm': 60, 'h': 3600, 'd': 86400}[match.group(2)]
+
+
+def newest_mtime(run):
+    newest = run.stat().st_mtime
+    for base, _, files in os.walk(run):
+        for name in files:
+            try:
+                newest = max(newest, (Path(base) / name).stat().st_mtime)
+            except OSError:
+                pass
+    return newest
+
+
+def in_progress(run, now=None, quiet_seconds=3600):
+    """True if no exit status was recorded and files changed recently (maybe still running)."""
+    now = time.time() if now is None else now
+    if read_json(run / 'metadata.json').get('exit_status') is not None:
+        return False
+    return now - newest_mtime(run) < quiet_seconds
+
+
+def select_for_clear(root, older_than=None, everything=False, now=None):
+    """(runs to delete, runs skipped because they may still be running)."""
+    now = time.time() if now is None else now
+    selected, skipped = [], []
+    for run in list_runs(root):
+        if in_progress(run, now):
+            skipped.append(run)
+        elif everything or (older_than is not None and now - run_start(run) > older_than):
+            selected.append(run)
+    return selected, skipped
+
+
 def resolve_run(root, name):
     """Run folder for 'latest', an exact folder name, or a unique prefix."""
     runs = list_runs(root)
@@ -338,6 +378,12 @@ def main(argv=None):
     export.add_argument('-o', '--output',
                         help='archive file or existing folder (default: current folder)')
     export.add_argument('--force', action='store_true', help='replace an existing archive')
+    clear = commands.add_parser('clear', help='preview or delete finished runs')
+    which = clear.add_mutually_exclusive_group(required=True)
+    which.add_argument('--older-than', help='runs started longer ago than this, e.g. 14d or 12h')
+    which.add_argument('--all', action='store_true', help='all finished runs')
+    clear.add_argument('--yes', action='store_true',
+                       help='actually delete (without it, only a preview is shown)')
     cleanup = commands.add_parser('prune', help='delete old run folders')
     cleanup.add_argument('--keep-runs', type=int, default=env_int('VISION_LOG_KEEP_RUNS', 30))
     cleanup.add_argument('--keep-days', type=int, default=env_int('VISION_LOG_KEEP_DAYS', 14))
@@ -406,6 +452,27 @@ def main(argv=None):
             print(f'[vision_logs] {error}', file=sys.stderr)
             return 1
         print(f'[vision_logs] wrote {archive} ({human_size(archive.stat().st_size)})')
+    elif args.command == 'clear':
+        try:
+            older = parse_age(args.older_than) if args.older_than else None
+        except ValueError as error:
+            print(f'[vision_logs] {error}', file=sys.stderr)
+            return 1
+        selected, skipped = select_for_clear(root, older, args.all)
+        total = 0
+        for run in selected:
+            size = dir_size(run)
+            total += size
+            print(f'{"deleting" if args.yes else "would delete"}: {run.name} ({human_size(size)})')
+        for run in skipped:
+            print(f'skipping (may still be running): {run.name}')
+        if args.yes:
+            for run in selected:
+                shutil.rmtree(run)
+            print(f'[vision_logs] deleted {len(selected)} run(s), freed {human_size(total)}')
+        else:
+            print(f'[vision_logs] preview: {len(selected)} run(s), {human_size(total)}. '
+                  'Nothing was deleted; add --yes to delete.')
     elif args.command == 'prune':
         removed = prune(root, args.keep_runs, args.keep_days, args.protect, args.dry_run)
         verb = 'would remove' if args.dry_run else 'removed'

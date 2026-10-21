@@ -551,6 +551,54 @@ def test_export_command_writes_archive_and_reports_errors(tmp_path, monkeypatch,
     assert logs.main(['export', 'nope', '--output', str(tmp_path / 'b.tar.gz')]) == 1
 
 
+def finished_run(root, name, age_days):
+    run = make_run(root, name, age_days)
+    (run / 'metadata.json').write_text(json.dumps({'exit_status': 0}))
+    return run
+
+
+def test_parse_age_reads_durations():
+    logs = load_vision_logs()
+    assert logs.parse_age('14d') == 14 * 86400
+    assert logs.parse_age('12h') == 43200
+    with pytest.raises(ValueError, match='cannot read age'):
+        logs.parse_age('yesterday')
+
+
+def test_clear_selects_by_age_or_all_and_skips_running_runs(tmp_path):
+    logs = load_vision_logs()
+    now = 1792584000  # 2026-10-21T12:00:00Z
+    old = finished_run(tmp_path, '2026-09-01_12-00-00', 0)
+    recent = finished_run(tmp_path, '2026-10-20_12-00-00', 0)
+    running = make_run(tmp_path, '2026-10-21_11-00-00', 0)
+    (running / 'metadata.json').write_text(json.dumps({'exit_status': None}))
+    for path in (running, running / 'console.log', running / 'metadata.json'):
+        os.utime(path, (now, now))
+    assert logs.in_progress(running, now)
+    assert not logs.in_progress(old, now)
+    selected, skipped = logs.select_for_clear(tmp_path, older_than=7 * 86400, now=now)
+    assert selected == [old]
+    assert skipped == [running]
+    selected, skipped = logs.select_for_clear(tmp_path, everything=True, now=now)
+    assert selected == [recent, old]
+    assert skipped == [running]
+
+
+def test_clear_command_previews_then_deletes(tmp_path, monkeypatch, capsys):
+    logs = load_vision_logs()
+    monkeypatch.setenv('VISION_LOG_ROOT', str(tmp_path))
+    old = finished_run(tmp_path, '2020-01-01_12-00-00', 0)
+    assert logs.main(['clear', '--older-than', '14d']) == 0
+    assert old.exists()
+    assert 'Nothing was deleted' in capsys.readouterr().out
+    assert logs.main(['clear', '--older-than', '14d', '--yes']) == 0
+    assert not old.exists()
+    assert logs.main(['clear', '--older-than', 'soon']) == 1
+    assert 'cannot read age' in capsys.readouterr().err
+    with pytest.raises(SystemExit):
+        logs.main(['clear'])
+
+
 @pytest.mark.parametrize('case', ['relative', 'missing', 'directory'])
 def test_svo_errors_explain_what_to_check(launches, tmp_path, case):
     front, _, _ = launches
