@@ -235,6 +235,16 @@ def test_warnings_only_when_mapping_extends_a_database(launches, tmp_path):
     assert 'WARN' not in slam.startup_summary('mapping', str(existing), 'live', '1', TOPICS)
 
 
+def test_serial_mismatch_warns_only_when_yaml_disagrees(launches, tmp_path):
+    _, slam, _ = launches
+    config = tmp_path / 'zed.yaml'
+    config.write_text('/**:\n  ros__parameters:\n    general:\n      serial_number: 111\n')
+    database = str(tmp_path / 'x.db')
+    assert any('111' in w for w in slam.startup_warnings('localization', database, '222', str(config)))
+    assert not slam.startup_warnings('localization', database, '111', str(config))
+    assert not slam.startup_warnings('localization', database, '222', str(tmp_path / 'none.yaml'))
+
+
 def test_missing_replay_fails_before_starting_camera(launches, tmp_path):
     front, _, _ = launches
     context = context_with_defaults(front, svo_path=str(tmp_path / 'missing.svo2'))
