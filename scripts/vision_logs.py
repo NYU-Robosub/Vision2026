@@ -9,6 +9,7 @@ import shutil
 import sys
 import time
 from pathlib import Path
+from collections import deque
 
 RUN_NAME = re.compile(r'^\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}$')
 
@@ -77,6 +78,27 @@ def format_runs(root, runs):
     total = sum(row['size'] for row in rows)
     lines.append(f'{len(rows)} run(s), {human_size(total)} total in {root}')
     return '\n'.join(lines)
+
+
+def tail_lines(path, count):
+    """Last `count` lines of a log, plus the byte offset where following should start."""
+    with open(path, errors='replace') as handle:
+        lines = list(deque(handle, maxlen=count)) if count > 0 else []
+    return lines, os.path.getsize(path)
+
+
+def follow(path, offset, poll=0.5):
+    """Yield complete lines appended after `offset`, waiting for more."""
+    with open(path, 'rb') as handle:
+        handle.seek(offset)
+        while True:
+            position = handle.tell()
+            line = handle.readline()
+            if line.endswith(b'\n'):
+                yield line.decode(errors='replace')
+            else:
+                handle.seek(position)  # Partial line: wait until it is finished.
+                time.sleep(poll)
 
 
 def resolve_run(root, name):
@@ -167,6 +189,12 @@ def main(argv=None):
     show = commands.add_parser('show', help="show a run's configuration and exit status")
     show.add_argument('run', nargs='?', default='latest',
                       help="'latest' (default), a run folder name, or a unique prefix")
+    tail = commands.add_parser('tail', help="print the end of a run's console log")
+    tail.add_argument('run', nargs='?', default='latest',
+                      help="'latest' (default), a run folder name, or a unique prefix")
+    tail.add_argument('-n', '--lines', type=int, default=40, help='lines to show (default 40)')
+    tail.add_argument('-f', '--follow', action='store_true',
+                      help='keep printing new lines; stop with Ctrl+C')
     cleanup = commands.add_parser('prune', help='delete old run folders')
     cleanup.add_argument('--keep-runs', type=int, default=env_int('VISION_LOG_KEEP_RUNS', 30))
     cleanup.add_argument('--keep-days', type=int, default=env_int('VISION_LOG_KEEP_DAYS', 14))
@@ -182,6 +210,25 @@ def main(argv=None):
         except ValueError as error:
             print(f'[vision_logs] {error}', file=sys.stderr)
             return 1
+    elif args.command == 'tail':
+        try:
+            log = resolve_run(root, args.run) / 'console.log'
+            if not log.is_file():
+                raise ValueError(f'{log} does not exist')
+        except ValueError as error:
+            print(f'[vision_logs] {error}', file=sys.stderr)
+            return 1
+        lines, offset = tail_lines(log, args.lines)
+        print(f'[vision_logs] {log}', file=sys.stderr)
+        sys.stdout.write(''.join(lines))
+        sys.stdout.flush()
+        if args.follow:
+            try:
+                for line in follow(log, offset):
+                    sys.stdout.write(line)
+                    sys.stdout.flush()
+            except KeyboardInterrupt:
+                pass
     elif args.command == 'prune':
         removed = prune(root, args.keep_runs, args.keep_days, args.protect, args.dry_run)
         verb = 'would remove' if args.dry_run else 'removed'

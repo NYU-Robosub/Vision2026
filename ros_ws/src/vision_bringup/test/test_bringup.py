@@ -383,6 +383,40 @@ def test_show_reports_configuration_and_exit_status(tmp_path):
     assert 'unknown' in bare and 'not recorded' in bare
 
 
+def test_tail_lines_returns_last_lines_and_offset(tmp_path):
+    logs = load_vision_logs()
+    log = tmp_path / 'console.log'
+    log.write_text('a\nb\nc\n')
+    lines, offset = logs.tail_lines(log, 2)
+    assert lines == ['b\n', 'c\n']
+    assert offset == log.stat().st_size
+    assert logs.tail_lines(log, 0)[0] == []
+
+
+def test_follow_yields_only_new_complete_lines(tmp_path):
+    logs = load_vision_logs()
+    log = tmp_path / 'console.log'
+    log.write_text('old\n')
+    offset = log.stat().st_size
+    with log.open('a') as handle:
+        handle.write('new\n')
+    stream = logs.follow(log, offset, poll=0.01)
+    assert next(stream) == 'new\n'
+    stream.close()
+
+
+def test_tail_command_prints_last_lines_and_reports_missing_log(
+        tmp_path, monkeypatch, capsys):
+    logs = load_vision_logs()
+    monkeypatch.setenv('VISION_LOG_ROOT', str(tmp_path))
+    run = make_run(tmp_path, '2026-10-21_12-00-00', 0)
+    (run / 'console.log').write_text('a\nb\nc\n')
+    assert logs.main(['tail', '-n', '2']) == 0
+    assert capsys.readouterr().out.split() == ['b', 'c']
+    (run / 'console.log').unlink()
+    assert logs.main(['tail']) == 1
+    assert 'does not exist' in capsys.readouterr().err
+
 @pytest.mark.parametrize('case', ['relative', 'missing', 'directory'])
 def test_svo_errors_explain_what_to_check(launches, tmp_path, case):
     front, _, _ = launches
