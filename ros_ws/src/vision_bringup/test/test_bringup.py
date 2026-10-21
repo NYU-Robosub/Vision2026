@@ -242,6 +242,20 @@ def test_missing_replay_fails_before_starting_camera(launches, tmp_path):
         front.launch_setup(context)
 
 
+@pytest.mark.parametrize('case', ['relative', 'missing', 'directory'])
+def test_svo_errors_explain_what_to_check(launches, tmp_path, case):
+    front, _, _ = launches
+    svo = {
+        'relative': 'room.svo2',
+        'missing': str(tmp_path / 'missing.svo2'),
+        'directory': str(tmp_path),
+    }[case]
+    context = context_with_defaults(front, svo_path=svo)
+    with pytest.raises(ValueError, match='svo_path') as error:
+        front.launch_setup(context)
+    assert 'Check:' in str(error.value)
+
+
 def test_missing_zed_wrapper_explains_next_step(launches, monkeypatch):
     front, _, share = launches
 

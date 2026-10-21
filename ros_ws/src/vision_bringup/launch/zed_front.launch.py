@@ -18,8 +18,24 @@ def launch_setup(context):
     replay = svo not in ('', 'live')
     if replay:
         recording = Path(svo).expanduser()
-        if not recording.is_absolute() or not recording.is_file():
-            raise ValueError('svo_path must be an existing absolute SVO/SVO2 file path')
+        if not recording.is_absolute():
+            raise ValueError(
+                f"svo_path '{svo}' is not an absolute path.\n"
+                'Check:\n'
+                '  - Use the full path, e.g. svo_path:=/home/you/recordings/room.svo2\n'
+                '  - Use svo_path:=live to run from the physical camera.')
+        if not recording.exists():
+            raise ValueError(
+                f'svo_path {recording} does not exist.\n'
+                'Check:\n'
+                '  - The spelling of the folder and file name.\n'
+                '  - That the recording was copied onto this machine.\n'
+                '  - Use svo_path:=live to run from the physical camera.')
+        if not recording.is_file():
+            raise ValueError(
+                f'svo_path {recording} is a folder, not a recording file.\n'
+                'Check:\n'
+                '  - Point svo_path at the .svo or .svo2 file itself.')
         svo = str(recording.resolve())
 
     try:
