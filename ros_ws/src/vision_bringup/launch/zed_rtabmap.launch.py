@@ -11,18 +11,39 @@ from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
 
+def failure(problem, *checks):
+    """Format an operator-facing error: what failed, then what to check next."""
+    lines = [problem, 'Check:']
+    lines.extend(f'  - {check}' for check in checks)
+    return '\n'.join(lines)
+
+
 def prepare_database_path(value, mode):
     """Resolve storage without ever creating, truncating, or deleting a database."""
     if mode not in ('mapping', 'localization'):
-        raise ValueError('mode must be mapping or localization')
+        raise ValueError(failure(
+            f"mode '{mode}' is not valid.",
+            'Use mode:=mapping to build a map, or mode:=localization to use a saved one.'))
     path = Path(value).expanduser()
     if not path.is_absolute():
-        raise ValueError('database_path must be absolute (or start with ~/)')
+        raise ValueError(failure(
+            f"database_path '{value}' is not an absolute path.",
+            'Use a full path such as ~/.ros/robosub/maps/bedroom.db.'))
     path = path.resolve()
-    if path.exists() and (not path.is_file() or path.stat().st_size == 0):
-        raise ValueError('database_path must name a nonempty database or a new file')
+    if path.exists() and not path.is_file():
+        raise ValueError(failure(
+            f'database_path {path} is a directory, not a database file.',
+            'Point database_path at a .db file, not a folder.'))
+    if path.exists() and path.stat().st_size == 0:
+        raise ValueError(failure(
+            f'database {path} exists but is empty (0 bytes).',
+            'A previous run may have crashed before saving. Choose a new path, '
+            'or remove the empty file if you are sure it holds nothing.'))
     if mode == 'localization' and not path.is_file():
-        raise ValueError('Localization requires an existing database; map the room first')
+        raise ValueError(failure(
+            f'localization needs an existing database, but {path} does not exist.',
+            'Run mode:=mapping first to create the map.',
+            'Or check database_path for typos.'))
     path.parent.mkdir(parents=True, exist_ok=True)
     return str(path)
 

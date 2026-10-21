@@ -104,6 +104,24 @@ def test_invalid_database_request_fails(launches, tmp_path, case):
     with pytest.raises(ValueError):
         slam.prepare_database_path(str(database), mode)
     assert not (tmp_path / 'missing').exists()
+    
+def test_database_errors_explain_what_to_check(launches, tmp_path):
+    _, slam, _ = launches
+    empty = tmp_path / 'empty.db'
+    empty.touch()
+    requests = [
+        ('typo', str(tmp_path / 'a.db'), 'not valid'),
+        ('mapping', 'room.db', 'absolute'),
+        ('mapping', str(tmp_path), 'directory'),
+        ('mapping', str(empty), 'empty'),
+        ('localization', str(tmp_path / 'none.db'), 'mapping first'),
+    ]
+    for mode, database, expected in requests:
+        with pytest.raises(ValueError) as error:
+            slam.prepare_database_path(database, mode)
+        message = str(error.value)
+        assert 'Check:' in message
+        assert expected in message
 
 
 def test_database_is_independent_of_working_directory(launches, tmp_path, monkeypatch):
