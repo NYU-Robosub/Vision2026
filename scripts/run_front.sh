@@ -10,9 +10,12 @@ cd "${REPO_ROOT}"
 # ROS's generated setup files reference optional environment variables.  Source
 # them with nounset disabled, then restore strict mode for the launcher itself.
 set +u
-source /opt/ros/"${ROS_DISTRO:-humble}"/setup.bash
-if [[ -f "${REPO_ROOT}/ros_ws/install/setup.bash" ]]; then
-  source "${REPO_ROOT}/ros_ws/install/setup.bash"
+# VISION_SKIP_ROS_SETUP=1 is for tests that supply their own fake ros2.
+if [[ "${VISION_SKIP_ROS_SETUP:-0}" != "1" ]]; then
+  source /opt/ros/"${ROS_DISTRO:-humble}"/setup.bash
+  if [[ -f "${REPO_ROOT}/ros_ws/install/setup.bash" ]]; then
+    source "${REPO_ROOT}/ros_ws/install/setup.bash"
+  fi
 fi
 set -u
 

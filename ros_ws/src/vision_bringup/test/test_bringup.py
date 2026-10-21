@@ -603,7 +603,9 @@ FAKE_ROS2 = """#!/usr/bin/env bash
 case "$1" in
   pkg) exit 0 ;;
   run) echo "$$" > "$FAKE_MONITOR_PID"; exec sleep 60 ;;
-  launch) echo "fake launch failed"; exit 1 ;;
+  launch)
+    for _ in $(seq 1 50); do [ -f "$FAKE_MONITOR_PID" ] && break; sleep 0.1; done
+    echo "fake launch failed"; exit 1 ;;
 esac
 """
 
@@ -620,7 +622,7 @@ def test_run_front_stops_monitor_and_records_exit_status(tmp_path):
         PATH=f'{fake_bin}:{os.environ["PATH"]}',
         VISION_LOG_ROOT=str(tmp_path / 'logs'),
         FAKE_MONITOR_PID=str(monitor_pid),
-        ROS_DISTRO='none-needed',
+        VISION_SKIP_ROS_SETUP='1',
     )
     started = time.time()
     result = subprocess.run(
