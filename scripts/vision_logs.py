@@ -78,6 +78,58 @@ def format_runs(root, runs):
     lines.append(f'{len(rows)} run(s), {human_size(total)} total in {root}')
     return '\n'.join(lines)
 
+
+def resolve_run(root, name):
+    """Run folder for 'latest', an exact folder name, or a unique prefix."""
+    runs = list_runs(root)
+    if not runs:
+        raise ValueError(f'no runs found in {root}')
+    if name == 'latest':
+        return runs[0]
+    matches = [run for run in runs if run.name == name] or [
+        run for run in runs if run.name.startswith(name)]
+    if len(matches) == 1:
+        return matches[0]
+    if not matches:
+        raise ValueError(f"no run matches '{name}'. Try: vision_logs.py list")
+    raise ValueError(f"'{name}' matches {len(matches)} runs; give a longer name")
+
+
+def format_run(run):
+    meta = read_json(run / 'metadata.json')
+    config = read_json(run / 'launch_config.json')
+    status = meta.get('exit_status')
+    if status is None:
+        outcome = 'unknown (still running, or killed before it could record)'
+    elif status == 0:
+        outcome = '0 (clean exit)'
+    else:
+        outcome = f'{status} (failed or interrupted)'
+    dirty = ' (uncommitted changes)' if meta.get('git_uncommitted_changes') else ''
+    lines = [
+        f'Run:         {run.name}',
+        f'Folder:      {run}',
+        f'Started:     {meta.get("started_utc", "-")}',
+        f'Finished:    {meta.get("finished_utc", "-")}',
+        f'Exit:        {outcome}',
+        f'Git:         {meta.get("git_revision", "-")} on {meta.get("git_branch", "-")}{dirty}',
+        f'Launch args: {" ".join(meta.get("launch_args", [])) or "(defaults)"}',
+    ]
+    if config:
+        lines.append('Configuration:')
+        for key in ('mode', 'input', 'svo_path', 'serial_number', 'database_path',
+                    'database_existed', 'zed_config', 'rtabmap_config'):
+            if key in config:
+                lines.append(f'  {key:<17}{config[key]}')
+        for name, topic in sorted(config.get('topics', {}).items()):
+            lines.append(f'  {name:<17}{topic}')
+    else:
+        lines.append('Configuration: not recorded (the launch stopped before it was '
+                     'resolved, or the run predates this feature)')
+    lines.append(f'Size:        {human_size(dir_size(run))}')
+    return '\n'.join(lines)
+
+
 def runs_to_prune(root, keep_runs, keep_days, protect=None, now=None):
     """Runs beyond the newest keep_runs, or older than keep_days. 0 disables a limit."""
     now = time.time() if now is None else now
@@ -112,6 +164,9 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest='command', required=True)
     commands.add_parser('list', help='list previous runs and disk usage')
+    show = commands.add_parser('show', help="show a run's configuration and exit status")
+    show.add_argument('run', nargs='?', default='latest',
+                      help="'latest' (default), a run folder name, or a unique prefix")
     cleanup = commands.add_parser('prune', help='delete old run folders')
     cleanup.add_argument('--keep-runs', type=int, default=env_int('VISION_LOG_KEEP_RUNS', 30))
     cleanup.add_argument('--keep-days', type=int, default=env_int('VISION_LOG_KEEP_DAYS', 14))
@@ -121,6 +176,12 @@ def main(argv=None):
     root = log_root()
     if args.command == 'list':
         print(format_runs(root, list_runs(root)))
+    elif args.command == 'show':
+        try:
+            print(format_run(resolve_run(root, args.run)))
+        except ValueError as error:
+            print(f'[vision_logs] {error}', file=sys.stderr)
+            return 1
     elif args.command == 'prune':
         removed = prune(root, args.keep_runs, args.keep_days, args.protect, args.dry_run)
         verb = 'would remove' if args.dry_run else 'removed'

@@ -353,6 +353,36 @@ def test_list_handles_missing_folder(tmp_path):
     assert '0 run(s)' in logs.format_runs(missing, logs.list_runs(missing))
     
 
+def test_resolve_run_by_latest_name_and_prefix(tmp_path):
+    logs = load_vision_logs()
+    older = make_run(tmp_path, '2026-10-20_12-00-00', 1)
+    newer = make_run(tmp_path, '2026-10-21_12-00-00', 0)
+    assert logs.resolve_run(tmp_path, 'latest') == newer
+    assert logs.resolve_run(tmp_path, '2026-10-20') == older
+    with pytest.raises(ValueError, match='no run matches'):
+        logs.resolve_run(tmp_path, '2025')
+    with pytest.raises(ValueError, match='matches 2'):
+        logs.resolve_run(tmp_path, '2026-10')
+    with pytest.raises(ValueError, match='no runs found'):
+        logs.resolve_run(tmp_path / 'none', 'latest')
+
+
+def test_show_reports_configuration_and_exit_status(tmp_path):
+    logs = load_vision_logs()
+    run = make_run(tmp_path, '2026-10-21_12-00-00', 0)
+    (run / 'metadata.json').write_text(json.dumps({
+        'exit_status': 1, 'git_revision': 'abc1234', 'git_branch': 'main',
+        'launch_args': ['mode:=mapping'], 'started_utc': 'T0'}))
+    (run / 'launch_config.json').write_text(json.dumps({
+        'mode': 'mapping', 'serial_number': '36534008', 'topics': {'odom_topic': '/odom'}}))
+    report = logs.format_run(run)
+    for expected in ('1 (failed or interrupted)', 'abc1234', 'mode:=mapping',
+                     '36534008', '/odom'):
+        assert expected in report
+    bare = logs.format_run(make_run(tmp_path, '2026-10-22_12-00-00', 0))
+    assert 'unknown' in bare and 'not recorded' in bare
+
+
 @pytest.mark.parametrize('case', ['relative', 'missing', 'directory'])
 def test_svo_errors_explain_what_to_check(launches, tmp_path, case):
     front, _, _ = launches
