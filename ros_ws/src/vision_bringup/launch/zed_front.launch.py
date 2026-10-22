@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from ament_index_python.packages import get_package_share_directory
+from ament_index_python.packages import PackageNotFoundError, get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, OpaqueFunction
 from launch.conditions import IfCondition
@@ -18,10 +18,38 @@ def launch_setup(context):
     replay = svo not in ('', 'live')
     if replay:
         recording = Path(svo).expanduser()
-        if not recording.is_absolute() or not recording.is_file():
-            raise ValueError('svo_path must be an existing absolute SVO/SVO2 file path')
+        if not recording.is_absolute():
+            raise ValueError(
+                f"svo_path '{svo}' is not an absolute path.\n"
+                'Check:\n'
+                '  - Use the full path, e.g. svo_path:=/home/you/recordings/room.svo2\n'
+                '  - Use svo_path:=live to run from the physical camera.')
+        if not recording.exists():
+            raise ValueError(
+                f'svo_path {recording} does not exist.\n'
+                'Check:\n'
+                '  - The spelling of the folder and file name.\n'
+                '  - That the recording was copied onto this machine.\n'
+                '  - Use svo_path:=live to run from the physical camera.')
+        if not recording.is_file():
+            raise ValueError(
+                f'svo_path {recording} is a folder, not a recording file.\n'
+                'Check:\n'
+                '  - Point svo_path at the .svo or .svo2 file itself.')
         svo = str(recording.resolve())
 
+    try:
+        zed_share = Path(get_package_share_directory('zed_wrapper'))
+    except PackageNotFoundError as error:
+        raise ValueError(
+            "package 'zed_wrapper' was not found.\n"
+            'Check:\n'
+            '  - Is the ZED SDK installed on this machine? It needs an NVIDIA GPU.\n'
+            '  - Is the ZED ROS 2 wrapper built, and did you source '
+            'ros_ws/install/setup.bash?\n'
+            '  - On a laptop without a ZED, this is expected. Only the camera '
+            'launch needs it.') from error
+            
     xacro_command = [
         FindExecutable(name='xacro'), ' ', str(share / 'urdf' / 'robosub_zed.urdf.xacro')
     ]
@@ -31,10 +59,7 @@ def launch_setup(context):
 
     return [
         IncludeLaunchDescription(
-            PythonLaunchDescriptionSource(str(
-                Path(get_package_share_directory('zed_wrapper')) / 'launch' /
-                'zed_camera.launch.py'
-            )),
+            PythonLaunchDescriptionSource(str(zed_share / 'launch' / 'zed_camera.launch.py')),
             launch_arguments={
                 'camera_name': 'zed_front',
                 'camera_model': 'zed2i',

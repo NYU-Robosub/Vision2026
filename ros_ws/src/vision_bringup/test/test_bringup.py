@@ -9,9 +9,11 @@ import subprocess
 
 import pytest
 import yaml
-from ament_index_python.packages import get_package_prefix, get_package_share_directory
+from ament_index_python.packages import (
+    PackageNotFoundError, get_package_prefix, get_package_share_directory)
 from launch import LaunchContext
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.actions import (
+    DeclareLaunchArgument, IncludeLaunchDescription, LogInfo, RegisterEventHandler)
 from launch.utilities import normalize_to_list_of_substitutions, perform_substitutions
 from launch_ros.actions import Node
 from launch_ros.utilities import evaluate_parameters
@@ -104,6 +106,24 @@ def test_invalid_database_request_fails(launches, tmp_path, case):
     with pytest.raises(ValueError):
         slam.prepare_database_path(str(database), mode)
     assert not (tmp_path / 'missing').exists()
+    
+def test_database_errors_explain_what_to_check(launches, tmp_path):
+    _, slam, _ = launches
+    empty = tmp_path / 'empty.db'
+    empty.touch()
+    requests = [
+        ('typo', str(tmp_path / 'a.db'), 'not valid'),
+        ('mapping', 'room.db', 'absolute'),
+        ('mapping', str(tmp_path), 'directory'),
+        ('mapping', str(empty), 'empty'),
+        ('localization', str(tmp_path / 'none.db'), 'mapping first'),
+    ]
+    for mode, database, expected in requests:
+        with pytest.raises(ValueError) as error:
+            slam.prepare_database_path(database, mode)
+        message = str(error.value)
+        assert 'Check:' in message
+        assert expected in message
 
 
 def test_database_is_independent_of_working_directory(launches, tmp_path, monkeypatch):
@@ -177,6 +197,69 @@ def test_slam_composition(launches, tmp_path, mode, replay):
         clock = action._Node__parameters[0]
         clock = {key: value for key, value in clock.items() if text(camera_context, key) == 'use_sim_time'}
         assert evaluate_parameters(camera_context, [clock])[0]['use_sim_time'] is replay
+        
+TOPICS = {
+    'rgb_topic': '/rgb', 'depth_topic': '/depth',
+    'camera_info_topic': '/info', 'odom_topic': '/odom',
+}
+
+
+@pytest.mark.parametrize('replay', [False, True])
+@pytest.mark.parametrize('mode', ['mapping', 'localization'])
+def test_startup_summary_lists_configuration(launches, tmp_path, mode, replay):
+    _, slam, _ = launches
+    database = tmp_path / 'room.db'
+    database.write_bytes(b'database fixture')
+    svo = tmp_path / 'room.svo2'
+    svo.touch()
+    context = context_with_defaults(
+        slam, database_path=str(database), mode=mode, svo_path=str(svo) if replay else 'live')
+    reports = [text(context, action.msg) for action in slam.launch_setup(context)
+               if isinstance(action, LogInfo)]
+    report = next(r for r in reports if 'Vision bring-up summary' in r)
+    assert mode in report
+    assert str(database) in report
+    assert '36534008' in report
+    assert '/rtabmap/cloud_map' in report
+    assert 'map -> odom' in report
+    assert ('SVO replay' in report) is replay
+    assert ('LIVE ZED' in report) is not replay
+
+
+def test_warnings_only_when_mapping_extends_a_database(launches, tmp_path):
+    _, slam, _ = launches
+    existing = tmp_path / 'room.db'
+    existing.write_bytes(b'x')
+    assert slam.startup_warnings('mapping', str(existing))
+    assert not slam.startup_warnings('localization', str(existing))
+    assert not slam.startup_warnings('mapping', str(tmp_path / 'new.db'))
+    assert 'WARN' not in slam.startup_summary('mapping', str(existing), 'live', '1', TOPICS)
+
+
+def test_serial_mismatch_warns_only_when_yaml_disagrees(launches, tmp_path):
+    _, slam, _ = launches
+    config = tmp_path / 'zed.yaml'
+    config.write_text('/**:\n  ros__parameters:\n    general:\n      serial_number: 111\n')
+    database = str(tmp_path / 'x.db')
+    assert any('111' in w for w in slam.startup_warnings('localization', database, '222', str(config)))
+    assert not slam.startup_warnings('localization', database, '111', str(config))
+    assert not slam.startup_warnings('localization', database, '222', str(tmp_path / 'none.yaml'))
+
+
+def test_rtabmap_exit_reports_what_to_check(launches):
+    _, slam, _ = launches
+    level, message = slam.rtabmap_exit_report(0, '/room.db')
+    assert level == 'info'
+    level, message = slam.rtabmap_exit_report(1, '/room.db')
+    assert level == 'error'
+    assert 'Check:' in message and '/room.db' in message
+
+
+def test_rtabmap_exit_handler_is_registered(launches, tmp_path):
+    _, slam, _ = launches
+    context = context_with_defaults(slam, database_path=str(tmp_path / 'room.db'))
+    assert any(isinstance(action, RegisterEventHandler)
+               for action in slam.launch_setup(context))
 
 
 def test_missing_replay_fails_before_starting_camera(launches, tmp_path):
@@ -184,6 +267,35 @@ def test_missing_replay_fails_before_starting_camera(launches, tmp_path):
     context = context_with_defaults(front, svo_path=str(tmp_path / 'missing.svo2'))
     with pytest.raises(ValueError, match='svo_path'):
         front.launch_setup(context)
+
+
+@pytest.mark.parametrize('case', ['relative', 'missing', 'directory'])
+def test_svo_errors_explain_what_to_check(launches, tmp_path, case):
+    front, _, _ = launches
+    svo = {
+        'relative': 'room.svo2',
+        'missing': str(tmp_path / 'missing.svo2'),
+        'directory': str(tmp_path),
+    }[case]
+    context = context_with_defaults(front, svo_path=svo)
+    with pytest.raises(ValueError, match='svo_path') as error:
+        front.launch_setup(context)
+    assert 'Check:' in str(error.value)
+
+
+def test_missing_zed_wrapper_explains_next_step(launches, monkeypatch):
+    front, _, share = launches
+
+    def lookup(name):
+        if name == 'zed_wrapper':
+            raise PackageNotFoundError(name)
+        return str(share)
+
+    monkeypatch.setattr(front, 'get_package_share_directory', lookup)
+    context = context_with_defaults(front)
+    with pytest.raises(ValueError, match='zed_wrapper') as error:
+        front.launch_setup(context)
+    assert 'Check:' in str(error.value)
 
 
 def test_rviz_shows_assembled_map_without_history(launches):
