@@ -27,18 +27,61 @@ def prepare_database_path(value, mode):
     return str(path)
 
 
+def startup_summary(mode, database, svo, serial, topics):
+    """One readable block describing what this launch is about to start."""
+    replay = svo not in ('', 'live')
+    path = Path(database)
+    if path.is_file():
+        db_status = f'existing ({path.stat().st_size:,} bytes), ' + (
+            'new nodes will be appended' if mode == 'mapping'
+            else 'localization only, no new map nodes')
+    else:
+        db_status = 'new file, created when RTAB-Map first saves'
+    lines = [
+        '=== Vision bring-up summary ===',
+        'Input:         ' + (f'SVO replay: {svo}' if replay else 'LIVE ZED 2i camera'),
+        f'Camera serial: {serial}',
+        f'SLAM mode:     {mode}',
+        f'Database:      {database}',
+        f'DB status:     {db_status}',
+        'Clock:         ' + ('SVO clock (use_sim_time)' if replay else 'system time'),
+        'Main topics:',
+        f'  RGB          {topics["rgb_topic"]}',
+        f'  Depth        {topics["depth_topic"]}',
+        f'  Camera info  {topics["camera_info_topic"]}',
+        f'  Odometry     {topics["odom_topic"]}',
+        '  Map output   /rtabmap/cloud_map',
+        # Keep in sync with publish_map_tf='false' in launch_setup below.
+        'TF ownership:',
+        '  odom -> zed_front_camera_link : ZED wrapper',
+        '  map -> odom                   : RTAB-Map (ZED map TF disabled)',
+        '  URDF / static frames          : robot_state_publisher',
+    ]
+    if mode == 'mapping' and path.is_file():
+        lines.append('WARN: mapping will extend the existing database; '
+                     'pass database_path:=<new file> for a fresh map')
+    return '\n'.join(lines)
+    
+    
 def launch_setup(context):
+
     share = Path(get_package_share_directory('vision_bringup'))
     mode = LaunchConfiguration('mode').perform(context)
     database = prepare_database_path(LaunchConfiguration('database_path').perform(context), mode)
     replay = LaunchConfiguration('svo_path').perform(context) not in ('', 'live')
+    topics = {name: LaunchConfiguration(name).perform(context) for name in (
+        'rgb_topic', 'depth_topic', 'camera_info_topic', 'odom_topic')}
+    summary = startup_summary(
+        mode, database, LaunchConfiguration('svo_path').perform(context),
+        LaunchConfiguration('serial_number').perform(context), topics)
     return [
-        LogInfo(msg=f'RTAB-Map {mode}: {database} (existing data is preserved)'),
+        LogInfo(msg=summary),
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(str(share / 'launch/zed_front.launch.py')),
             launch_arguments={
                 'zed_config': LaunchConfiguration('zed_config'),
                 'svo_path': LaunchConfiguration('svo_path'),
+                'serial_number': LaunchConfiguration('serial_number'),
                 'publish_map_tf': 'false',
                 'export_fused_map': 'false',
                 'rviz_config': str(share / 'rviz/rtabmap_slam.rviz'),
@@ -81,6 +124,7 @@ def generate_launch_description():
         DeclareLaunchArgument('database_path', default_value=str(
             Path.home() / '.ros/robosub/maps/bedroom.db')),
         DeclareLaunchArgument('svo_path', default_value='live'),
+        DeclareLaunchArgument('serial_number', default_value='36534008'),
         DeclareLaunchArgument('zed_config', default_value=str(share / 'config/zed_front_rtabmap.yaml')),
         DeclareLaunchArgument('rtabmap_config', default_value=str(share / 'config/rtabmap.yaml')),
     ]
