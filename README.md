@@ -4,9 +4,15 @@ Bedroom-scale, above-water SLAM using a ZED 2i and ROS 2. ZED supplies RGB,
 registered depth, calibration, and visual-inertial odometry. RTAB-Map builds the
 accumulated room map, corrects its graph, and stores a reusable database.
 
-The current test environment is a laptop Linux VM. Jetson Orin deployment comes
-later. There is no detector, custom SLAM algorithm, external IMU fusion, or motion
-control in this update. Requirements and implementation status are in [scope.md](scope.md).
+The mapping test environment is a laptop Linux VM. Jetson Orin mapping deployment
+comes later. The mapping launch contains no detector, custom SLAM algorithm,
+external IMU fusion, or motion control. Requirements and implementation status
+are in [scope.md](scope.md).
+
+An optional, separate [live chair-detection node](ros_ws/src/chair_detection/README.md)
+consumes the existing RGB feed using YOLOv8n on CUDA and publishes
+`/vision/chair_count`. It starts no camera, saves no images, and does not modify
+the mapping stack. See its README for Jetson dependencies, build, and run commands.
 
 ## Build in Linux
 

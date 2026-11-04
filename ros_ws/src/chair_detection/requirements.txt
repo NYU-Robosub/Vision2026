@@ -1,0 +1,5 @@
+# Install in the JetPack-compatible CUDA PyTorch environment; see README.
+ultralytics==8.4.174
+# Humble's binary cv_bridge is built against NumPy 1.x.
+numpy>=1.23,<2
+opencv-python>=4.6,<4.12
