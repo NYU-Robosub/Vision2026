@@ -26,6 +26,13 @@ examined after it ends, including runs that failed to start.
 - The runtime status monitor (`vision_status`) starts next to the launch when it is installed.
   Its output goes into `console.log`.
 
+Runtime logs are local artifacts, not repository content. The default log root is
+outside the repository. Git ignores `logs/` directories, `*.log`, and rotated
+`*.log.*` files. If overriding `VISION_LOG_ROOT` inside the repository, use a
+`logs/` directory so metadata and ROS output are ignored together. Keep exported
+log bundles outside the repository too. The previously tracked camera log is
+removed from the branch's tracked files; existing Git history is unchanged.
+
 ## Settings (environment variables)
 
 | Variable | Default | Meaning |
