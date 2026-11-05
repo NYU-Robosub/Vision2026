@@ -14,10 +14,10 @@ class VisionStatus(Node):
     def __init__(self):
         super().__init__('vision_status')
         defaults = {
-            'rgb': ('/zed/zed_node/rgb/image_rect_color', Image),
-            'depth': ('/zed/zed_node/depth/depth_registered', Image),
-            'camera_info': ('/zed/zed_node/rgb/camera_info', CameraInfo),
-            'odometry': ('/zed/zed_node/odom', Odometry),
+            'rgb': ('/zed_front/zed_node/rgb/color/rect/image', Image),
+            'depth': ('/zed_front/zed_node/depth/depth_registered', Image),
+            'camera_info': ('/zed_front/zed_node/rgb/color/rect/camera_info', CameraInfo),
+            'odometry': ('/zed_front/zed_node/odom', Odometry),
             'cloud_map': ('/rtabmap/cloud_map', PointCloud2),
         }
         self.declare_parameter('timeout_sec', 3.0)

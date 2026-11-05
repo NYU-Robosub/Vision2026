@@ -5,6 +5,11 @@
 __pycache__/
 .pytest_cache/
 
+# Runtime logs are local artifacts, including per-run metadata under logs/.
+logs/
+*.log
+*.log.*
+
 # Local ROS data captures and generated model artifacts
 /data/rosbags/*
 /data/svo/bottom/*
