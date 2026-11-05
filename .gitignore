@@ -2,6 +2,8 @@
 /ros_ws/build/
 /ros_ws/install/
 /ros_ws/log/
+/logs/
+*.log
 __pycache__/
 .pytest_cache/
 
