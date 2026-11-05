@@ -1,0 +1,6 @@
+chair_detection:
+  ros__parameters:
+    model_path: yolov8n.pt
+    image_topic: /zed_front/zed_node/rgb/color/rect/image
+    confidence_threshold: 0.5
+    inference_fps: 10.0
