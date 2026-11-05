@@ -1,5 +1,9 @@
 # Run logs and troubleshooting
 
+For standalone monitor checks and combined camera/monitor testing, see
+[combined_monitor_testing.md](combined_monitor_testing.md). PR #6 consolidates
+the startup diagnostics from #1 and the monitor-topic correction from #4.
+
 Every run of `scripts/run_front.sh` saves its output in its own folder, so a run can be
 examined after it ends, including runs that failed to start.
 
