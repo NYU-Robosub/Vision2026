@@ -153,8 +153,9 @@ SSH-tunnel tab. Closing the viewer or tunnel alone does not stop the ROS stack
 or the VNC server. Leave shared VNC sessions running unless the team agrees
 they should be stopped.
 
-## Foxglove follow-up
+## Foxglove connection
 
-Foxglove will be evaluated separately as an alternative interface for live ROS
-data inspection. This guide documents the existing SSH/VNC/RViz workflow;
-Foxglove setup and connection instructions are not included yet.
+For live visualization without VNC, use the
+[Foxglove over Tailscale guide](foxglove_connection.md). It documents installation,
+the independent bridge launch, topic selection, and troubleshooting. This VNC
+guide remains a fallback for RViz and other Jetson desktop applications.
