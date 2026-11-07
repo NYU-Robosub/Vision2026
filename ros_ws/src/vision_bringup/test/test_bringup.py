@@ -1,5 +1,9 @@
 """Launch contracts and database preservation; no camera or SLAM mocks required."""
 
+import tarfile
+import os
+import time
+import json
 import importlib.util
 from pathlib import Path
 import shutil
@@ -9,9 +13,11 @@ import subprocess
 
 import pytest
 import yaml
-from ament_index_python.packages import get_package_prefix, get_package_share_directory
+from ament_index_python.packages import (
+    PackageNotFoundError, get_package_prefix, get_package_share_directory)
 from launch import LaunchContext
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.actions import (
+    DeclareLaunchArgument, IncludeLaunchDescription, LogInfo, RegisterEventHandler)
 from launch.utilities import normalize_to_list_of_substitutions, perform_substitutions
 from launch_ros.actions import Node
 from launch_ros.utilities import evaluate_parameters
@@ -104,6 +110,24 @@ def test_invalid_database_request_fails(launches, tmp_path, case):
     with pytest.raises(ValueError):
         slam.prepare_database_path(str(database), mode)
     assert not (tmp_path / 'missing').exists()
+    
+def test_database_errors_explain_what_to_check(launches, tmp_path):
+    _, slam, _ = launches
+    empty = tmp_path / 'empty.db'
+    empty.touch()
+    requests = [
+        ('typo', str(tmp_path / 'a.db'), 'not valid'),
+        ('mapping', 'room.db', 'absolute'),
+        ('mapping', str(tmp_path), 'directory'),
+        ('mapping', str(empty), 'empty'),
+        ('localization', str(tmp_path / 'none.db'), 'mapping first'),
+    ]
+    for mode, database, expected in requests:
+        with pytest.raises(ValueError) as error:
+            slam.prepare_database_path(database, mode)
+        message = str(error.value)
+        assert 'Check:' in message
+        assert expected in message
 
 
 def test_database_is_independent_of_working_directory(launches, tmp_path, monkeypatch):
@@ -177,6 +201,69 @@ def test_slam_composition(launches, tmp_path, mode, replay):
         clock = action._Node__parameters[0]
         clock = {key: value for key, value in clock.items() if text(camera_context, key) == 'use_sim_time'}
         assert evaluate_parameters(camera_context, [clock])[0]['use_sim_time'] is replay
+        
+TOPICS = {
+    'rgb_topic': '/rgb', 'depth_topic': '/depth',
+    'camera_info_topic': '/info', 'odom_topic': '/odom',
+}
+
+
+@pytest.mark.parametrize('replay', [False, True])
+@pytest.mark.parametrize('mode', ['mapping', 'localization'])
+def test_startup_summary_lists_configuration(launches, tmp_path, mode, replay):
+    _, slam, _ = launches
+    database = tmp_path / 'room.db'
+    database.write_bytes(b'database fixture')
+    svo = tmp_path / 'room.svo2'
+    svo.touch()
+    context = context_with_defaults(
+        slam, database_path=str(database), mode=mode, svo_path=str(svo) if replay else 'live')
+    reports = [text(context, action.msg) for action in slam.launch_setup(context)
+               if isinstance(action, LogInfo)]
+    report = next(r for r in reports if 'Vision bring-up summary' in r)
+    assert mode in report
+    assert str(database) in report
+    assert '36534008' in report
+    assert '/rtabmap/cloud_map' in report
+    assert 'map -> odom' in report
+    assert ('SVO replay' in report) is replay
+    assert ('LIVE ZED' in report) is not replay
+
+
+def test_warnings_only_when_mapping_extends_a_database(launches, tmp_path):
+    _, slam, _ = launches
+    existing = tmp_path / 'room.db'
+    existing.write_bytes(b'x')
+    assert slam.startup_warnings('mapping', str(existing))
+    assert not slam.startup_warnings('localization', str(existing))
+    assert not slam.startup_warnings('mapping', str(tmp_path / 'new.db'))
+    assert 'WARN' not in slam.startup_summary('mapping', str(existing), 'live', '1', TOPICS)
+
+
+def test_serial_mismatch_warns_only_when_yaml_disagrees(launches, tmp_path):
+    _, slam, _ = launches
+    config = tmp_path / 'zed.yaml'
+    config.write_text('/**:\n  ros__parameters:\n    general:\n      serial_number: 111\n')
+    database = str(tmp_path / 'x.db')
+    assert any('111' in w for w in slam.startup_warnings('localization', database, '222', str(config)))
+    assert not slam.startup_warnings('localization', database, '111', str(config))
+    assert not slam.startup_warnings('localization', database, '222', str(tmp_path / 'none.yaml'))
+
+
+def test_rtabmap_exit_reports_what_to_check(launches):
+    _, slam, _ = launches
+    level, message = slam.rtabmap_exit_report(0, '/room.db')
+    assert level == 'info'
+    level, message = slam.rtabmap_exit_report(1, '/room.db')
+    assert level == 'error'
+    assert 'Check:' in message and '/room.db' in message
+
+
+def test_rtabmap_exit_handler_is_registered(launches, tmp_path):
+    _, slam, _ = launches
+    context = context_with_defaults(slam, database_path=str(tmp_path / 'room.db'))
+    assert any(isinstance(action, RegisterEventHandler)
+               for action in slam.launch_setup(context))
 
 
 def test_missing_replay_fails_before_starting_camera(launches, tmp_path):
@@ -184,6 +271,405 @@ def test_missing_replay_fails_before_starting_camera(launches, tmp_path):
     context = context_with_defaults(front, svo_path=str(tmp_path / 'missing.svo2'))
     with pytest.raises(ValueError, match='svo_path'):
         front.launch_setup(context)
+
+
+def test_launch_config_is_saved_in_run_folder(launches, tmp_path, monkeypatch):
+    _, slam, _ = launches
+    run_dir = tmp_path / 'run'
+    run_dir.mkdir()
+    monkeypatch.setenv('VISION_RUN_DIR', str(run_dir))
+    database = tmp_path / 'room.db'
+    database.write_bytes(b'x')
+    context = context_with_defaults(slam, database_path=str(database), mode='localization')
+    slam.launch_setup(context)
+    saved = json.loads((run_dir / 'launch_config.json').read_text())
+    assert saved['mode'] == 'localization'
+    assert saved['database_path'] == str(database)
+    assert saved['database_existed'] is True
+    assert saved['input'] == 'live'
+    assert saved['serial_number'] == '36534008'
+    assert saved['topics']['odom_topic'] == '/zed_front/zed_node/odom'
+
+
+def test_no_run_folder_means_no_config_file(launches):
+    _, slam, _ = launches
+    assert slam.write_run_config(None, {'mode': 'mapping'}) is None
+    
+    
+def load_vision_logs():
+    spec = importlib.util.spec_from_file_location(
+        'vision_logs', REPO / 'scripts' / 'vision_logs.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def make_run(root, name, age_days):
+    run = root / name
+    run.mkdir(parents=True)
+    (run / 'console.log').write_text('x')
+    stamp = time.time() - age_days * 86400
+    os.utime(run, (stamp, stamp))
+    return run
+
+
+def test_prune_by_age_protects_current_run_and_other_folders(tmp_path):
+    logs = load_vision_logs()
+    newest = make_run(tmp_path, '2026-10-21_12-00-00', 0)
+    recent = make_run(tmp_path, '2026-10-20_12-00-00', 1)
+    old = make_run(tmp_path, '2026-09-01_12-00-00', 50)
+    unrelated = tmp_path / 'notes'
+    unrelated.mkdir()
+    removed = logs.prune(tmp_path, keep_runs=0, keep_days=14, protect=newest)
+    assert removed == [old]
+    assert not old.exists()
+    assert newest.exists() and recent.exists() and unrelated.exists()
+
+
+def test_prune_by_count_and_dry_run(tmp_path):
+    logs = load_vision_logs()
+    runs = [make_run(tmp_path, f'2026-10-{day:02d}_12-00-00', 0) for day in (18, 19, 20, 21)]
+    would = logs.prune(tmp_path, keep_runs=2, keep_days=0, dry_run=True)
+    assert sorted(would) == sorted(runs[:2])
+    assert all(run.exists() for run in runs)
+    logs.prune(tmp_path, keep_runs=2, keep_days=0)
+    assert [run.exists() for run in runs] == [False, False, True, True]
+
+
+def test_list_shows_runs_with_status_and_size(tmp_path):
+    logs = load_vision_logs()
+    run = make_run(tmp_path, '2026-10-21_12-00-00', 0)
+    (run / 'metadata.json').write_text(
+        json.dumps({'exit_status': 1, 'git_revision': 'abc1234'}))
+    (run / 'launch_config.json').write_text(json.dumps({'mode': 'mapping', 'input': 'live'}))
+    report = logs.format_runs(tmp_path, logs.list_runs(tmp_path))
+    for expected in ('2026-10-21_12-00-00', 'mapping', 'live', 'abc1234', '1 run(s)'):
+        assert expected in report
+    assert logs.describe_run(run)['exit'] == '1'
+
+
+def test_list_handles_missing_folder(tmp_path):
+    logs = load_vision_logs()
+    missing = tmp_path / 'none'
+    assert '0 run(s)' in logs.format_runs(missing, logs.list_runs(missing))
+    
+
+def test_resolve_run_by_latest_name_and_prefix(tmp_path):
+    logs = load_vision_logs()
+    older = make_run(tmp_path, '2026-10-20_12-00-00', 1)
+    newer = make_run(tmp_path, '2026-10-21_12-00-00', 0)
+    assert logs.resolve_run(tmp_path, 'latest') == newer
+    assert logs.resolve_run(tmp_path, '2026-10-20') == older
+    with pytest.raises(ValueError, match='no run matches'):
+        logs.resolve_run(tmp_path, '2025')
+    with pytest.raises(ValueError, match='matches 2'):
+        logs.resolve_run(tmp_path, '2026-10')
+    with pytest.raises(ValueError, match='no runs found'):
+        logs.resolve_run(tmp_path / 'none', 'latest')
+
+
+def test_show_reports_configuration_and_exit_status(tmp_path):
+    logs = load_vision_logs()
+    run = make_run(tmp_path, '2026-10-21_12-00-00', 0)
+    (run / 'metadata.json').write_text(json.dumps({
+        'exit_status': 1, 'git_revision': 'abc1234', 'git_branch': 'main',
+        'launch_args': ['mode:=mapping'], 'started_utc': 'T0'}))
+    (run / 'launch_config.json').write_text(json.dumps({
+        'mode': 'mapping', 'serial_number': '36534008', 'topics': {'odom_topic': '/odom'}}))
+    report = logs.format_run(run)
+    for expected in ('1 (failed or interrupted)', 'abc1234', 'mode:=mapping',
+                     '36534008', '/odom'):
+        assert expected in report
+    bare = logs.format_run(make_run(tmp_path, '2026-10-22_12-00-00', 0))
+    assert 'unknown' in bare and 'not recorded' in bare
+
+
+def test_tail_lines_returns_last_lines_and_offset(tmp_path):
+    logs = load_vision_logs()
+    log = tmp_path / 'console.log'
+    log.write_text('a\nb\nc\n')
+    lines, offset = logs.tail_lines(log, 2)
+    assert lines == ['b\n', 'c\n']
+    assert offset == log.stat().st_size
+    assert logs.tail_lines(log, 0)[0] == []
+
+
+def test_follow_yields_only_new_complete_lines(tmp_path):
+    logs = load_vision_logs()
+    log = tmp_path / 'console.log'
+    log.write_text('old\n')
+    offset = log.stat().st_size
+    with log.open('a') as handle:
+        handle.write('new\n')
+    stream = logs.follow(log, offset, poll=0.01)
+    assert next(stream) == 'new\n'
+    stream.close()
+
+
+def test_tail_command_prints_last_lines_and_reports_missing_log(
+        tmp_path, monkeypatch, capsys):
+    logs = load_vision_logs()
+    monkeypatch.setenv('VISION_LOG_ROOT', str(tmp_path))
+    run = make_run(tmp_path, '2026-10-21_12-00-00', 0)
+    (run / 'console.log').write_text('a\nb\nc\n')
+    assert logs.main(['tail', '-n', '2']) == 0
+    assert capsys.readouterr().out.split() == ['b', 'c']
+    (run / 'console.log').unlink()
+    assert logs.main(['tail']) == 1
+    assert 'does not exist' in capsys.readouterr().err
+
+
+SAMPLE_LOG = [
+    '[INFO] [launch]: start\n',
+    '[WARN] [1792607599.5] [vision_status]: rgb: data timed out\n',
+    '[ERROR] [launch]: Caught exception: bad\n',
+    'Check:\n',
+    '  - fix it\n',
+    '[WARNING] [vision_bringup]: mapping will extend\n',
+]
+
+
+def test_search_filters_by_level_node_and_text():
+    logs = load_vision_logs()
+
+    def matched(results):
+        return [number for number, _, hit in results if hit]
+
+    assert matched(logs.search_lines(SAMPLE_LOG, level='WARN')) == [2, 6]
+    assert matched(logs.search_lines(SAMPLE_LOG, min_level='ERROR')) == [3, 4, 5]
+    assert matched(logs.search_lines(SAMPLE_LOG, node='vision_status')) == [2]
+    assert matched(logs.search_lines(SAMPLE_LOG, text='TIMED OUT')) == [2]
+
+
+def test_search_context_marks_matches_and_separates_groups():
+    logs = load_vision_logs()
+    results = logs.search_lines(SAMPLE_LOG, text='timed out', context=1)
+    assert [(number, hit) for number, _, hit in results] == [(1, False), (2, True), (3, False)]
+    gaps = logs.format_search('run', logs.search_lines(SAMPLE_LOG, level='WARN'))
+    assert '--' in gaps
+
+
+def test_search_command_covers_runs_and_requires_a_filter(tmp_path, monkeypatch, capsys):
+    logs = load_vision_logs()
+    monkeypatch.setenv('VISION_LOG_ROOT', str(tmp_path))
+    first = make_run(tmp_path, '2026-10-20_12-00-00', 1)
+    second = make_run(tmp_path, '2026-10-21_12-00-00', 0)
+    (first / 'console.log').write_text(''.join(SAMPLE_LOG))
+    (second / 'console.log').write_text('[INFO] [launch]: fine\n')
+    assert logs.main(['search', '--all', '--level', 'WARN']) == 0
+    out = capsys.readouterr().out
+    assert '2026-10-20_12-00-00:2:' in out
+    assert '2026-10-21_12-00-00' not in out
+    assert logs.main(['search']) == 1
+    assert 'at least one' in capsys.readouterr().err
+
+
+def test_parse_time_accepts_relative_and_utc_values():
+    logs = load_vision_logs()
+    assert logs.parse_time('2h', now=10000) == 10000 - 7200
+    assert logs.parse_time('1d', now=100000) == 100000 - 86400
+    assert logs.parse_time('2026-10-21T18:41:00') == 1792608060
+    assert logs.parse_time('2026-10-21 18:41') == 1792608060
+    assert logs.parse_time('2026-10-21') == 1792540800
+    with pytest.raises(ValueError, match='cannot read time'):
+        logs.parse_time('yesterday')
+
+
+def test_search_by_time_uses_node_times_and_inherits_for_other_lines():
+    logs = load_vision_logs()
+    lines = [
+        '[INFO] [launch]: start\n',
+        '[WARN] [100.5] [vision_status]: early\n',
+        'Check: early detail\n',
+        '[WARN] [200.5] [vision_status]: late\n',
+    ]
+    times = logs.line_times(lines, start=50.0)
+    assert times == [50.0, 100.5, 100.5, 200.5]
+
+    def matched(**options):
+        results = logs.search_lines(lines, times=times, **options)
+        return [number for number, _, hit in results if hit]
+
+    assert matched(since=150) == [4]
+    assert matched(until=150) == [1, 2, 3]
+    assert matched(since=60, until=150) == [2, 3]
+
+
+def test_search_command_filters_by_time(tmp_path, monkeypatch, capsys):
+    logs = load_vision_logs()
+    monkeypatch.setenv('VISION_LOG_ROOT', str(tmp_path))
+    run = make_run(tmp_path, '2026-10-21_12-00-00', 0)
+    (run / 'metadata.json').write_text(json.dumps({'started_utc': '2026-10-21T12:00:00Z'}))
+    (run / 'console.log').write_text(
+        '[WARN] [1792584100.0] [vision_status]: early\n'
+        '[WARN] [1792591200.0] [vision_status]: late\n')
+    assert logs.main(['search', '--since', '2026-10-21T13:00']) == 0
+    out = capsys.readouterr().out
+    assert 'late' in out and 'early' not in out
+    assert logs.main(['search', '--since', 'someday']) == 1
+    assert 'cannot read time' in capsys.readouterr().err
+
+
+def test_export_archives_the_whole_run_folder(tmp_path):
+    logs = load_vision_logs()
+    run = make_run(tmp_path / 'logs', '2026-10-21_12-00-00', 0)
+    (run / 'metadata.json').write_text('{}')
+    destination = tmp_path / 'share.tar.gz'
+    assert logs.export_run(run, destination) == destination
+    with tarfile.open(destination) as archive:
+        names = archive.getnames()
+    assert '2026-10-21_12-00-00/console.log' in names
+    assert '2026-10-21_12-00-00/metadata.json' in names
+    assert logs.export_run(run, tmp_path) == tmp_path / '2026-10-21_12-00-00.tar.gz'
+
+
+def test_export_refuses_overwrite_and_output_inside_run(tmp_path):
+    logs = load_vision_logs()
+    run = make_run(tmp_path / 'logs', '2026-10-21_12-00-00', 0)
+    destination = tmp_path / 'share.tar.gz'
+    destination.write_bytes(b'keep me')
+    with pytest.raises(ValueError, match='already exists'):
+        logs.export_run(run, destination)
+    assert destination.read_bytes() == b'keep me'
+    logs.export_run(run, destination, force=True)
+    assert destination.read_bytes() != b'keep me'
+    with pytest.raises(ValueError, match='inside the run folder'):
+        logs.export_run(run, run / 'again.tar.gz')
+    with pytest.raises(ValueError, match='does not exist'):
+        logs.export_run(run, tmp_path / 'missing' / 'x.tar.gz')
+
+
+def test_export_command_writes_archive_and_reports_errors(tmp_path, monkeypatch, capsys):
+    logs = load_vision_logs()
+    monkeypatch.setenv('VISION_LOG_ROOT', str(tmp_path / 'logs'))
+    make_run(tmp_path / 'logs', '2026-10-21_12-00-00', 0)
+    destination = tmp_path / 'share.tar.gz'
+    assert logs.main(['export', 'latest', '--output', str(destination)]) == 0
+    assert destination.is_file()
+    assert logs.main(['export', 'latest', '--output', str(destination)]) == 1
+    assert 'already exists' in capsys.readouterr().err
+    assert logs.main(['export', 'nope', '--output', str(tmp_path / 'b.tar.gz')]) == 1
+
+
+def finished_run(root, name, age_days):
+    run = make_run(root, name, age_days)
+    (run / 'metadata.json').write_text(json.dumps({'exit_status': 0}))
+    return run
+
+
+def test_parse_age_reads_durations():
+    logs = load_vision_logs()
+    assert logs.parse_age('14d') == 14 * 86400
+    assert logs.parse_age('12h') == 43200
+    with pytest.raises(ValueError, match='cannot read age'):
+        logs.parse_age('yesterday')
+
+
+def test_clear_selects_by_age_or_all_and_skips_running_runs(tmp_path):
+    logs = load_vision_logs()
+    now = 1792584000  # 2026-10-21T12:00:00Z
+    old = finished_run(tmp_path, '2026-09-01_12-00-00', 0)
+    recent = finished_run(tmp_path, '2026-10-20_12-00-00', 0)
+    running = make_run(tmp_path, '2026-10-21_11-00-00', 0)
+    (running / 'metadata.json').write_text(json.dumps({'exit_status': None}))
+    for path in (running, running / 'console.log', running / 'metadata.json'):
+        os.utime(path, (now, now))
+    assert logs.in_progress(running, now)
+    assert not logs.in_progress(old, now)
+    selected, skipped = logs.select_for_clear(tmp_path, older_than=7 * 86400, now=now)
+    assert selected == [old]
+    assert skipped == [running]
+    selected, skipped = logs.select_for_clear(tmp_path, everything=True, now=now)
+    assert selected == [recent, old]
+    assert skipped == [running]
+
+
+def test_clear_command_previews_then_deletes(tmp_path, monkeypatch, capsys):
+    logs = load_vision_logs()
+    monkeypatch.setenv('VISION_LOG_ROOT', str(tmp_path))
+    old = finished_run(tmp_path, '2020-01-01_12-00-00', 0)
+    assert logs.main(['clear', '--older-than', '14d']) == 0
+    assert old.exists()
+    assert 'Nothing was deleted' in capsys.readouterr().out
+    assert logs.main(['clear', '--older-than', '14d', '--yes']) == 0
+    assert not old.exists()
+    assert logs.main(['clear', '--older-than', 'soon']) == 1
+    assert 'cannot read age' in capsys.readouterr().err
+    with pytest.raises(SystemExit):
+        logs.main(['clear'])
+
+
+FAKE_ROS2 = """#!/usr/bin/env bash
+case "$1" in
+  pkg) exit 0 ;;
+  run) echo "$$" > "$FAKE_MONITOR_PID"; exec sleep 60 ;;
+  launch)
+    for _ in $(seq 1 50); do [ -f "$FAKE_MONITOR_PID" ] && break; sleep 0.1; done
+    echo "fake launch failed"; exit 1 ;;
+esac
+"""
+
+
+def test_run_front_stops_monitor_and_records_exit_status(tmp_path):
+    fake_bin = tmp_path / 'bin'
+    fake_bin.mkdir()
+    fake = fake_bin / 'ros2'
+    fake.write_text(FAKE_ROS2)
+    fake.chmod(0o755)
+    monitor_pid = tmp_path / 'monitor.pid'
+    env = dict(
+        os.environ,
+        PATH=f'{fake_bin}:{os.environ["PATH"]}',
+        VISION_LOG_ROOT=str(tmp_path / 'logs'),
+        FAKE_MONITOR_PID=str(monitor_pid),
+        VISION_SKIP_ROS_SETUP='1',
+    )
+    started = time.time()
+    result = subprocess.run(
+        ['bash', str(REPO / 'scripts' / 'run_front.sh'), 'mode:=mapping'],
+        env=env, capture_output=True, text=True, timeout=30)
+    assert time.time() - started < 20
+    assert result.returncode == 1
+    assert 'fake launch failed' in result.stdout
+    run = next((tmp_path / 'logs').iterdir())
+    assert 'fake launch failed' in (run / 'console.log').read_text()
+    metadata = json.loads((run / 'metadata.json').read_text())
+    assert metadata['exit_status'] == 1
+    assert metadata['launch_args'] == ['mode:=mapping']
+    assert monitor_pid.exists()
+    pid = int(monitor_pid.read_text())
+    time.sleep(0.5)
+    with pytest.raises(ProcessLookupError):
+        os.kill(pid, 0)
+
+
+@pytest.mark.parametrize('case', ['relative', 'missing', 'directory'])
+def test_svo_errors_explain_what_to_check(launches, tmp_path, case):
+    front, _, _ = launches
+    svo = {
+        'relative': 'room.svo2',
+        'missing': str(tmp_path / 'missing.svo2'),
+        'directory': str(tmp_path),
+    }[case]
+    context = context_with_defaults(front, svo_path=svo)
+    with pytest.raises(ValueError, match='svo_path') as error:
+        front.launch_setup(context)
+    assert 'Check:' in str(error.value)
+
+
+def test_missing_zed_wrapper_explains_next_step(launches, monkeypatch):
+    front, _, share = launches
+
+    def lookup(name):
+        if name == 'zed_wrapper':
+            raise PackageNotFoundError(name)
+        return str(share)
+
+    monkeypatch.setattr(front, 'get_package_share_directory', lookup)
+    context = context_with_defaults(front)
+    with pytest.raises(ValueError, match='zed_wrapper') as error:
+        front.launch_setup(context)
+    assert 'Check:' in str(error.value)
 
 
 def test_rviz_shows_assembled_map_without_history(launches):
