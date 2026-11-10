@@ -24,11 +24,20 @@ def load_model(path):
     if not torch.cuda.is_available():
         raise RuntimeError('CUDA is unavailable. Install JetPack-compatible CUDA PyTorch.')
     model = YOLO(path)
-    names = model.names
-    if len(names) <= 56 or names[56] != 'chair':
-        raise ValueError('Model must use COCO class 56 = chair (use pretrained yolov8n.pt).')
     model.to('cuda:0')
     return model
+
+
+def resolve_classes(names, requested):
+    """Resolve user-facing class names using the selected model's label table."""
+    if not requested or any(not name.strip() for name in requested):
+        raise ValueError('object_classes must contain at least one nonempty class name.')
+    items = names.items() if isinstance(names, dict) else enumerate(names)
+    by_name = {str(name).lower(): int(index) for index, name in items}
+    missing = [name for name in requested if name.strip().lower() not in by_name]
+    if missing:
+        raise ValueError(f'Classes not found in model: {missing}. Available: {list(by_name)}')
+    return sorted({by_name[name.strip().lower()] for name in requested})
 
 
 class ChairDetection(Node):
@@ -41,6 +50,7 @@ class ChairDetection(Node):
                 'image_topic', '/zed_front/zed_node/rgb/color/rect/image', descriptor)
             self.declare_parameter('confidence_threshold', 0.5, descriptor)
             self.declare_parameter('inference_fps', 10.0, descriptor)
+            self.declare_parameter('object_classes', ['chair'], descriptor)
             model_path = self.get_parameter('model_path').value
             image_topic = self.get_parameter('image_topic').value
             self.confidence = self.get_parameter('confidence_threshold').value
@@ -53,6 +63,10 @@ class ChairDetection(Node):
                 raise ValueError('inference_fps must be finite and greater than zero.')
 
             self.model = load_model(model_path)
+            self.class_ids = resolve_classes(
+                self.model.names, self.get_parameter('object_classes').value)
+            names = self.model.names
+            self.chair_id = next((i for i in self.class_ids if names[i].lower() == 'chair'), None)
             self.bridge = CvBridge()
             self.lock = threading.Lock()
             self.latest = None
@@ -60,6 +74,7 @@ class ChairDetection(Node):
             self.completed = 0
             self.report_time = time.monotonic()
             self.publisher = self.create_publisher(Int32, '/vision/chair_count', 1)
+            self.image_publisher = self.create_publisher(Image, '/vision/chair_image', 1)
             qos = QoSProfile(history=HistoryPolicy.KEEP_LAST, depth=1,
                              reliability=ReliabilityPolicy.BEST_EFFORT)
             self.subscription = self.create_subscription(Image, image_topic, self.receive, qos)
@@ -88,17 +103,34 @@ class ChairDetection(Node):
         try:
             frame = self.bridge.imgmsg_to_cv2(message, desired_encoding='bgr8')
             result = self.model.predict(
-                source=frame, device=0, classes=[56], conf=self.confidence,
+                source=frame, device=0, classes=self.class_ids, conf=self.confidence,
                 verbose=False, save=False, save_txt=False, save_crop=False,
                 save_conf=False, show=False, visualize=False)[0]
-            count = len(result.boxes) if result.boxes is not None else 0
+            count = 0
+            if result.boxes is not None and self.chair_id is not None:
+                count = sum(int(box.cls.item()) == self.chair_id for box in result.boxes)
         except Exception as error:
             self.get_logger().error(f'Chair inference failed: {error}', throttle_duration_sec=5.0)
             return  # Failure is not evidence of zero chairs.
         self.publisher.publish(Int32(data=count))
+        self.publish_annotated_image(result, message.header)
         with self.lock:
             self.count = count
             self.completed += 1
+
+    def publish_annotated_image(self, result, header):
+        """Render only for viewers; preserve the processed frame's timestamp."""
+        if not self.image_publisher.get_subscription_count():
+            return
+        try:
+            annotated = result.plot()
+            output = self.bridge.cv2_to_imgmsg(annotated, encoding='bgr8')
+            output.header = header
+            self.image_publisher.publish(output)
+        except Exception as error:
+            self.get_logger().error(
+                f'Could not publish annotated chair image: {error}',
+                throttle_duration_sec=5.0)
 
     def report(self):
         now = time.monotonic()

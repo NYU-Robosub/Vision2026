@@ -1,12 +1,14 @@
 # Live chair detection
 
 Headless ROS 2 Humble node for Jetson AGX Orin. Subscribes to the existing ZED
-rectified RGB topic; does not start or open a camera. Uses pretrained COCO
-`yolov8n.pt`, CUDA device 0, and class 56 (`chair`). The mapping stack is independent.
+rectified RGB topic; does not start or open a camera. By default uses pretrained
+COCO `yolov8n.pt`, CUDA device 0, and the `chair` class. The mapping stack is independent.
 
 Publishes `/vision/chair_count` (`std_msgs/msg/Int32`) once per successfully
 processed image, including zero when no chairs are detected. This is the count
-in the latest processed image, not unique chairs over time. Prints
+in the latest processed image, not unique chairs over time. If `chair` is not in
+the selected classes, the chair count is zero. Other selected classes are drawn
+but are not included in this count. Prints
 `Chairs detected: N | FPS: X` about once per second; FPS is completed inferences
 per elapsed wall-clock second, including the configured rate limit.
 
@@ -17,7 +19,14 @@ The requested FPS is a ceiling/target, not a performance guarantee. With no new
 images there is no repeated inference or count publication. Failed inference
 does not publish a misleading zero; consumers should time out stale counts.
 
-No snapshots, annotated images, video, detection files, tracking, depth
+When an image subscriber is present, publishes `/vision/chair_image`
+(`sensor_msgs/msg/Image`) with YOLO's chair boxes and confidence labels drawn on
+the processed frame. Its timestamp and frame ID come from the input image. The
+annotated stream updates at the inference rate and is independent of RTAB-Map;
+the original camera image remains available at full camera rate. The node does
+not annotate frames when there are no subscribers.
+
+No snapshots, video, detection files, tracking, depth
 localization, or map writes are implemented. No GUI is opened. Weights and
 dependency caches are installation assets, not recorded camera data.
 
@@ -64,6 +73,12 @@ ros2 topic info /zed_front/zed_node/rgb/color/rect/image
 ros2 launch chair_detection chair_detection.launch.py
 ```
 
+Keep the existing mapping launch and Foxglove bridge running. In Foxglove, add
+an Image panel and select `/vision/chair_image`; keep `/rtabmap/cloud_map`
+enabled in a 3D panel with display frame `map`. The box positions are 2D image
+detections, not chair positions in the map. GPU load and network bandwidth may
+reduce the rate of detection or mapping; monitor both on the Jetson.
+
 In another sourced terminal:
 
 ```bash
@@ -73,14 +88,14 @@ ros2 topic hz /vision/chair_count
 
 `yolov8n.pt` is downloaded by Ultralytics on first use if missing (internet needed).
 For an offline Jetson, provision the pretrained weights first and use an absolute
-path. Do not substitute the repository's gate-trained weights. CUDA absence or a
-model whose class 56 is not `chair` fails startup instead of falling back to CPU.
+path. CUDA absence or a requested class absent from the chosen model fails startup.
 
-All four parameters are startup-only. Override them directly:
+All parameters are startup-only. Override them directly:
 
 ```bash
 ros2 run chair_detection chair_detection --ros-args \
   -p model_path:=/absolute/path/to/yolov8n.pt \
+  -p 'object_classes:=[chair,person]' \
   -p image_topic:=/zed_front/zed_node/rgb/color/rect/image \
   -p confidence_threshold:=0.5 \
   -p inference_fps:=10.0
@@ -99,7 +114,7 @@ removing all chairs produces zero, and stopping the image stream stops updates.
 ## Validation performed
 
 Built this package in isolation on Ubuntu 22.04 WSL / ROS 2 Humble, Python 3.10.
-All 11 pytest cases passed using real ROS messages, executors, topic transport,
+All 15 pytest cases passed using real ROS messages, executors, topic transport,
 and CvBridge, with a fake YOLO model and synthetic in-memory images. Checked the
 installed launch file with `ros2 launch ... --show-args`. No camera or mapping
 nodes were started. The test environment selected Ubuntu's NumPy 1.x through
@@ -108,4 +123,8 @@ system-wide NumPy 2 installation is incompatible with Humble's binary CvBridge.
 
 **Live detection, actual YOLO/CUDA inference, and Jetson performance are not
 tested.** The tests do not require or download weights, torch, or Ultralytics.
-Run the commands above on the Jetson to validate the real model and camera.
+The updated suite covers class selection, chair-only counting, annotated image
+headers, rendering only for viewers, and continued counting after rendering
+failure. The annotation test uses a fake model render; real YOLO drawing still
+needs a live check. Run the commands above on the Jetson to validate the real
+model and camera.
