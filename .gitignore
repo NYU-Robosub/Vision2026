@@ -8,6 +8,11 @@ __pycache__/
 .pytest_cache/
 
 # Local ROS data captures and generated model artifacts
+*.pt
+*.pth
+*.onnx
+*.engine
+*.plan
 /data/rosbags/*
 /data/svo/bottom/*
 /data/svo/front/*

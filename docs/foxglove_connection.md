@@ -142,6 +142,7 @@ Do not rename publishers just to match a saved layout; select the running topics
 | Accumulated map | `/rtabmap/cloud_map` (verify) | Depends on RTAB-Map namespace |
 | Transforms | `/tf`, `/tf_static` | Same unless remapped |
 | Chair count | `/vision/chair_count` when the detector runs | Independent of camera namespace |
+| Chair image | `/vision/chair_image` when the detector runs | Annotated processed RGB image |
 
 - **Image panel:** select the live RGB topic. If bandwidth is limiting, select its
   existing `/compressed` topic if advertised and supported. Do not select depth
@@ -152,8 +153,8 @@ Do not rename publishers just to match a saved layout; select the running topics
   `header.frame_id`. A live cloud is one observation; it is not the accumulated map.
 - **Raw Messages / Plot:** inspect odometry, diagnostics (if published), and
   `/vision/chair_count`. Use the ROS graph view where supported to inspect nodes
-  and connections. The current chair node only publishes a count, not boxes;
-  future detector messages must be published before Foxglove can display them.
+  and connections. Select `/vision/chair_image` in another Image panel to see
+  chair bounding boxes and confidence labels when the detector runs.
 
 Select the accumulated cloud in the panel before judging whether it is publishing:
 some map output is generated only when subscribed. Start with RGB and one cloud
