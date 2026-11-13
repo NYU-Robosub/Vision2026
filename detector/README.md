@@ -128,3 +128,39 @@ The test set did not contain ground-truth examples of `gate_blue`, so that class
 Qualitative inspection of the test predictions showed that the model consistently detected the full gate and both gate legs across the available test images.
 
 This model is intended as a simple first baseline rather than a final production detector. The goal is to establish a working, reproducible training pipeline that can be improved with additional data, labeling cleanup, and broader underwater testing.
+## Gate Detection Fine-Tuning (November 2026)
+
+Fine-tuned the existing YOLOv8 gate-only detector using
+additional underwater gate images from the Sailfish ROV dataset.
+
+### Training Configuration
+- Starting weights: gate_only_clipped/best.pt
+- Training epochs: 35
+- Image resolution: 640x640
+- Batch size: 8
+- GPU: NVIDIA RTX 5060 Laptop GPU
+- Classes: 1 (gate)
+
+### Dataset
+- Original NYU RoboSub gate dataset
+- Sailfish ROV Gates Detection dataset
+- Sailfish dataset: https://universe.roboflow.com/sailfish-rov/gates-detection
+- License: CC BY 4.0
+
+### Test Results
+
+Both models were evaluated on the same combined test set
+containing 127 images and 112 labeled gate instances.
+
+| Metric | Original Model | Fine-Tuned Model |
+|--------|---------------:|-----------------:|
+| Precision | 42.5% | 99.3% |
+| Recall | 20.5% | 98.2% |
+| mAP@50 | 25.2% | 98.5% |
+| mAP@50-95 | 16.8% | 89.2% |
+
+The fine-tuned model showed substantially improved performance
+on the combined test set.
+
+Further evaluation on independent underwater footage is needed
+to confirm generalization and assess Jetson deployment readiness.
