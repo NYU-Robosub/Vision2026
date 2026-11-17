@@ -2,7 +2,7 @@
 <package format="3">
   <name>chair_detection</name>
   <version>0.1.0</version>
-  <description>Live CUDA chair counts from an existing RGB image topic</description>
+  <description>Configurable CUDA object detections from an existing RGB image topic</description>
   <maintainer email="maintainers@example.com">NYU RoboSub</maintainer>
   <license>Apache-2.0</license>
   <buildtool_depend>ament_python</buildtool_depend>

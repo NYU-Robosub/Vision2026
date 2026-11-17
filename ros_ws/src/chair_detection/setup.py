@@ -16,7 +16,7 @@ setup(
     zip_safe=True,
     maintainer='NYU RoboSub',
     maintainer_email='maintainers@example.com',
-    description='Live CUDA chair counts from an existing RGB image topic',
+    description='Configurable CUDA object detections from an existing RGB image topic',
     license='Apache-2.0',
     entry_points={'console_scripts': ['chair_detection = chair_detection.node:main']},
 )

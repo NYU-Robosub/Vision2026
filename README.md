@@ -9,10 +9,18 @@ comes later. The mapping launch contains no detector, custom SLAM algorithm,
 external IMU fusion, or motion control. Requirements and implementation status
 are in [scope.md](scope.md).
 
-An optional, separate [live chair-detection node](ros_ws/src/chair_detection/README.md)
-consumes the existing RGB feed using YOLOv8n on CUDA and publishes
-`/vision/chair_count`. It starts no camera, saves no images, and does not modify
-the mapping stack. See its README for Jetson dependencies, build, and run commands.
+An optional [configurable object-detection node](ros_ws/src/chair_detection/README.md)
+consumes the existing RGB feed using a selected YOLO detection checkpoint on CUDA.
+Supply the local weights path through `model_path` and the model's target labels
+through `object_classes`. It publishes per-class counts, boxes, and confidence as
+JSON on `/vision/detections`, plus `/vision/detection_image` for viewing. It starts
+no camera, saves no images, and does not modify the mapping stack.
+
+For Jetson setup, startup commands, model swapping, and expected results, follow
+the [detector workflow](ros_ws/src/chair_detection/README.md#jetson-testing-workflow).
+The current mapping bringup does **not** start the detector. A single bringup
+forwarding model/class arguments is the intended future interface, not an
+implemented launch option.
 
 ## Build in Linux
 

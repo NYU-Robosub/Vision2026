@@ -1,6 +1,8 @@
-"""Headless, latest-frame chair detection. No images or detections are saved."""
+"""Headless, latest-frame detection for configured model classes."""
 
+import json
 import math
+from pathlib import Path
 import threading
 import time
 
@@ -13,18 +15,31 @@ from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import Image
-from std_msgs.msg import Int32
+from std_msgs.msg import String
 
 
 def load_model(path):
+    checkpoint = Path(path).expanduser().resolve()
+    if not checkpoint.is_file():
+        raise ValueError(f'model_path must point to an existing local weights file: {checkpoint}')
+    if checkpoint.suffix.lower() != '.pt' or checkpoint.stat().st_size == 0:
+        raise ValueError(f'model_path must be a nonempty .pt detection checkpoint: {checkpoint}')
     # Lazy imports let ROS contract tests run without downloading weights or CUDA.
     import torch
     from ultralytics import YOLO
 
     if not torch.cuda.is_available():
         raise RuntimeError('CUDA is unavailable. Install JetPack-compatible CUDA PyTorch.')
-    model = YOLO(path)
-    model.to('cuda:0')
+    try:
+        model = YOLO(str(checkpoint))
+    except Exception as error:
+        raise RuntimeError(f'Could not load checkpoint {checkpoint}: {error}') from error
+    if model.task != 'detect':
+        raise ValueError(f'Expected a detection model (detect), got {model.task!r}: {checkpoint}')
+    try:
+        model.to('cuda:0')
+    except Exception as error:
+        raise RuntimeError(f'Could not move model to CUDA device 0: {error}') from error
     return model
 
 
@@ -40,7 +55,7 @@ def resolve_classes(names, requested):
     return sorted({by_name[name.strip().lower()] for name in requested})
 
 
-class ChairDetection(Node):
+class DetectionNode(Node):
     def __init__(self, **kwargs):
         super().__init__('chair_detection', **kwargs)
         try:
@@ -65,16 +80,14 @@ class ChairDetection(Node):
             self.model = load_model(model_path)
             self.class_ids = resolve_classes(
                 self.model.names, self.get_parameter('object_classes').value)
-            names = self.model.names
-            self.chair_id = next((i for i in self.class_ids if names[i].lower() == 'chair'), None)
             self.bridge = CvBridge()
             self.lock = threading.Lock()
             self.latest = None
-            self.count = 0
+            self.counts = {self.model.names[i]: 0 for i in self.class_ids}
             self.completed = 0
             self.report_time = time.monotonic()
-            self.publisher = self.create_publisher(Int32, '/vision/chair_count', 1)
-            self.image_publisher = self.create_publisher(Image, '/vision/chair_image', 1)
+            self.publisher = self.create_publisher(String, '/vision/detections', 1)
+            self.image_publisher = self.create_publisher(Image, '/vision/detection_image', 1)
             qos = QoSProfile(history=HistoryPolicy.KEEP_LAST, depth=1,
                              reliability=ReliabilityPolicy.BEST_EFFORT)
             self.subscription = self.create_subscription(Image, image_topic, self.receive, qos)
@@ -86,14 +99,44 @@ class ChairDetection(Node):
                 1.0 / fps, self.infer, callback_group=self.inference_group,
                 clock=self.wall_clock)
             self.report_timer = self.create_timer(1.0, self.report, clock=self.wall_clock)
-            self.get_logger().info(f'CUDA chair detection subscribed to {image_topic}')
-        except Exception:
+            self.get_logger().info(
+                f'CUDA detection using {Path(model_path).expanduser().resolve()}; '
+                f'subscribed to {image_topic}; classes: {list(self.counts)}')
+        except Exception as error:
+            self.get_logger().fatal(f'Detector startup failed: {error}')
             self.destroy_node()
             raise
 
     def receive(self, message):
         with self.lock:
             self.latest = message
+
+    def detect(self, frame):
+        """Return the YOLO result and per-class instances for one BGR frame.
+
+        Boxes are [x_min, y_min, x_max, y_max] in input-image pixels.
+        Counts represent this frame, not tracked identities across frames.
+        """
+        result = self.model.predict(
+            source=frame, device=0, classes=self.class_ids, conf=self.confidence,
+            verbose=False, save=False, save_txt=False, save_crop=False,
+            save_conf=False, show=False, visualize=False)[0]
+        classes = {
+            self.model.names[i]: {'class_id': i, 'count': 0, 'instances': []}
+            for i in self.class_ids
+        }
+        if result.boxes is not None:
+            for box in result.boxes:
+                class_id = int(box.cls.item())
+                if class_id not in self.class_ids:
+                    continue
+                entry = classes[self.model.names[class_id]]
+                entry['instances'].append({
+                    'bbox_xyxy': box.xyxy[0].tolist(),
+                    'confidence': float(box.conf.item()),
+                })
+                entry['count'] += 1
+        return result, classes
 
     def infer(self):
         with self.lock:
@@ -102,20 +145,22 @@ class ChairDetection(Node):
             return
         try:
             frame = self.bridge.imgmsg_to_cv2(message, desired_encoding='bgr8')
-            result = self.model.predict(
-                source=frame, device=0, classes=self.class_ids, conf=self.confidence,
-                verbose=False, save=False, save_txt=False, save_crop=False,
-                save_conf=False, show=False, visualize=False)[0]
-            count = 0
-            if result.boxes is not None and self.chair_id is not None:
-                count = sum(int(box.cls.item()) == self.chair_id for box in result.boxes)
+            result, classes = self.detect(frame)
         except Exception as error:
-            self.get_logger().error(f'Chair inference failed: {error}', throttle_duration_sec=5.0)
-            return  # Failure is not evidence of zero chairs.
-        self.publisher.publish(Int32(data=count))
+            self.get_logger().error(f'Object inference failed: {error}', throttle_duration_sec=5.0)
+            return  # Failure is not evidence of zero objects.
+        payload = {
+            'header': {
+                'frame_id': message.header.frame_id,
+                'stamp': {'sec': message.header.stamp.sec,
+                          'nanosec': message.header.stamp.nanosec},
+            },
+            'classes': classes,
+        }
+        self.publisher.publish(String(data=json.dumps(payload, allow_nan=False)))
         self.publish_annotated_image(result, message.header)
         with self.lock:
-            self.count = count
+            self.counts = {name: entry['count'] for name, entry in classes.items()}
             self.completed += 1
 
     def publish_annotated_image(self, result, header):
@@ -129,22 +174,23 @@ class ChairDetection(Node):
             self.image_publisher.publish(output)
         except Exception as error:
             self.get_logger().error(
-                f'Could not publish annotated chair image: {error}',
+                f'Could not publish annotated detection image: {error}',
                 throttle_duration_sec=5.0)
 
     def report(self):
         now = time.monotonic()
         with self.lock:
-            count, completed = self.count, self.completed
+            counts, completed = self.counts.copy(), self.completed
             self.completed = 0
         elapsed = now - self.report_time
         self.report_time = now
         if completed:
             # Console only: do not persist detection counts in ROS log files.
-            print(f'Chairs detected: {count} | FPS: {completed / elapsed:.1f}', flush=True)
+            summary = ' | '.join(f'{name}: {count}' for name, count in counts.items())
+            print(f'{summary} | FPS: {completed / elapsed:.1f}', flush=True)
         else:
             self.get_logger().warning(
-                'No completed image inference in the last second; chair count is not fresh.',
+                'No completed image inference in the last second; object counts are not fresh.',
                 throttle_duration_sec=5.0)
 
 
@@ -153,7 +199,7 @@ def main(args=None):
     node = None
     executor = MultiThreadedExecutor(num_threads=2)
     try:
-        node = ChairDetection()
+        node = DetectionNode()
         executor.add_node(node)
         executor.spin()
     except (KeyboardInterrupt, ExternalShutdownException):
