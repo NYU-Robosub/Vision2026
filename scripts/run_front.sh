@@ -91,6 +91,24 @@ trap 'write_metadata "$?" "$@"' EXIT
   else
     echo "[run_front] runtime status monitor not started (vision_status not installed, or disabled)"
   fi
+  # Optional live view: VISION_FOXGLOVE=1 starts the Foxglove bridge for this run.
+  # Only the topics below are streamed; image topics stalled RTAB-Map in testing.
+  FOXGLOVE_PID=""
+  if [[ "${VISION_FOXGLOVE:-0}" == "1" ]]; then
+    if ros2 pkg prefix foxglove_bridge >/dev/null 2>&1; then
+      FOXGLOVE_PORT="${VISION_FOXGLOVE_PORT:-8765}"
+      FOXGLOVE_TOPICS="${VISION_FOXGLOVE_TOPICS:-['/rosout','/tf','/tf_static','/diagnostics','/rtabmap/cloud_map','/rtabmap/localization_pose']}"
+      echo "[run_front] starting Foxglove bridge on port ${FOXGLOVE_PORT}; its output is in ${RUN_DIR}/foxglove_bridge.log"
+      echo "[run_front] streaming only: ${FOXGLOVE_TOPICS}"
+      setsid ros2 launch foxglove_bridge foxglove_bridge_launch.xml \
+        port:="${FOXGLOVE_PORT}" topic_whitelist:="${FOXGLOVE_TOPICS}" \
+        > "${RUN_DIR}/foxglove_bridge.log" 2>&1 &
+      FOXGLOVE_PID=$!
+    else
+      echo "[run_front] WARNING: VISION_FOXGLOVE=1 but the foxglove_bridge package was not found; continuing without it."
+      echo "[run_front] Check: install it with 'sudo apt install ros-${ROS_DISTRO:-humble}-foxglove-bridge' and source ROS before running."
+    fi
+  fi
   # A failing launch must still stop the monitor and report its own exit status.
   set +e
   ros2 launch vision_bringup zed_rtabmap.launch.py "$@"
@@ -100,6 +118,10 @@ trap 'write_metadata "$?" "$@"' EXIT
     # setsid gave the monitor its own process group; stop the whole group.
     kill -TERM -- "-${MONITOR_PID}" 2>/dev/null || kill -TERM "${MONITOR_PID}" 2>/dev/null || true
     wait "${MONITOR_PID}" 2>/dev/null || true
+  fi
+  if [[ -n "${FOXGLOVE_PID}" ]]; then
+    kill -TERM -- "-${FOXGLOVE_PID}" 2>/dev/null || kill -TERM "${FOXGLOVE_PID}" 2>/dev/null || true
+    wait "${FOXGLOVE_PID}" 2>/dev/null || true
   fi
   exit "${LAUNCH_STATUS}"
 } 2>&1 | (trap "" INT; exec tee "${RUN_DIR}/console.log")
