@@ -105,3 +105,17 @@ These were tested without a camera, so check them on the robot:
   and the status monitor should stop
 - which serial number the ZED wrapper uses when the launch argument and the YAML disagree
 - camera-not-found, missing topics and TF problems at runtime
+
+## Live view with Foxglove
+
+Set `VISION_FOXGLOVE=1` to start the Foxglove bridge together with a run:
+
+```
+VISION_FOXGLOVE=1 bash scripts/run_front.sh mode:=localization database_path:=/path/to/map.db start_rviz:=false
+```
+
+Then in Foxglove choose Open connection, Foxglove WebSocket, and enter `ws://<jetson-tailscale-ip>:8765`.
+
+- Only these topics are streamed: `/rosout`, `/tf`, `/tf_static`, `/diagnostics`, `/rtabmap/cloud_map` and `/rtabmap/localization_pose`. Change them with `VISION_FOXGLOVE_TOPICS` (a ROS list string) and the port with `VISION_FOXGLOVE_PORT`. Do not stream image topics: they stalled RTAB-Map in testing.
+- The bridge's output is saved as `foxglove_bridge.log` in the run folder, and the bridge stops when the launch ends. The last few lines of that log can be missing after shutdown.
+- Foxglove's Log panel shows node messages published to `/rosout`. The startup summary and `Check:` messages are printed by the launch system, so they appear only in the terminal and `console.log`, not in Foxglove.
