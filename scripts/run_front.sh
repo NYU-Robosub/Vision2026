@@ -102,4 +102,4 @@ trap 'write_metadata "$?" "$@"' EXIT
     wait "${MONITOR_PID}" 2>/dev/null || true
   fi
   exit "${LAUNCH_STATUS}"
-} 2>&1 | tee "${RUN_DIR}/console.log"
+} 2>&1 | (trap "" INT; exec tee "${RUN_DIR}/console.log")
